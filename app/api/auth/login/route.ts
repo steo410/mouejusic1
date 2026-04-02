@@ -1,0 +1,26 @@
+import bcrypt from "bcryptjs";
+import { SESSION_COOKIE } from "@/lib/auth";
+import { createSession, findUserByUsername } from "@/lib/demo-db";
+import { NextResponse } from "next/server";
+import { z } from "zod";
+
+const schema = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1)
+});
+
+export async function POST(req: Request) {
+  const parsed = schema.safeParse(await req.json());
+  if (!parsed.success) return NextResponse.json({ message: "아이디/비밀번호를 입력해주세요." }, { status: 400 });
+
+  const user = findUserByUsername(parsed.data.username);
+  if (!user) return NextResponse.json({ message: "로그인 실패" }, { status: 401 });
+
+  const matched = await bcrypt.compare(parsed.data.password, user.passwordHash);
+  if (!matched) return NextResponse.json({ message: "로그인 실패" }, { status: 401 });
+
+  const token = createSession(user.id);
+  const res = NextResponse.json({ message: "로그인 성공", user: { id: user.id, nickname: user.nickname } });
+  res.cookies.set(SESSION_COOKIE, token, { httpOnly: true, sameSite: "lax", path: "/" });
+  return res;
+}

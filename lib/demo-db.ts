@@ -1,10 +1,12 @@
 import crypto from "crypto";
+import bcrypt from "bcryptjs";
 
 export type User = {
   id: string;
   username: string;
   passwordHash: string;
   nickname: string;
+  isAdmin?: boolean;
   createdAt: string;
 };
 
@@ -49,9 +51,19 @@ declare global {
 
 function getStore(): Store {
   if (!global.__stockSimStore) {
+    const now = new Date().toISOString();
+    const masterUser: User = {
+      id: crypto.randomUUID(),
+      username: "steo410",
+      passwordHash: bcrypt.hashSync("steojhukna", 10),
+      nickname: "CM sj",
+      isAdmin: true,
+      createdAt: now
+    };
+
     global.__stockSimStore = {
-      users: [],
-      accounts: [],
+      users: [masterUser],
+      accounts: [{ userId: masterUser.id, cashBalance: 10_000_000 }],
       holdings: [],
       trades: [],
       sessions: [],

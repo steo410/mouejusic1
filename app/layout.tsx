@@ -15,7 +15,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
             <div className="flex gap-4">
               <Link href="/">홈</Link>
               {!me && <Link href="/auth">로그인/회원가입</Link>}
-              {me && <Link href="/mypage">마이페이지</Link>}
+              <Link href="/mypage">마이페이지</Link>
               {me?.isAdmin && <Link href="/admin">관리자</Link>}
             </div>
             <SessionBadge />

@@ -55,8 +55,13 @@ const DATA_DIR = path.join(process.cwd(), ".data");
 const DATA_FILE = path.join(DATA_DIR, "demo-db.json");
 
 function persistStore(store: Store) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(DATA_FILE, JSON.stringify(store), "utf8");
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(DATA_FILE, JSON.stringify(store), "utf8");
+  } catch {
+    // 일부 배포 환경(읽기 전용 파일시스템)에서는 디스크 저장이 실패할 수 있으므로
+    // 메모리 스토어만으로 계속 동작하도록 예외를 삼킨다.
+  }
 }
 
 function loadStoreFromDisk(): Store | null {

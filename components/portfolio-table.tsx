@@ -47,7 +47,8 @@ export function PortfolioTable() {
         return;
       }
       setMessage(body.message ?? "매도 완료");
-      window.location.reload();
+      await loadPortfolio();
+      window.dispatchEvent(new Event("portfolio:updated"));
     } catch {
       setMessage("매도 요청 중 오류가 발생했습니다.");
     }
@@ -57,7 +58,14 @@ export function PortfolioTable() {
     let timer: NodeJS.Timeout;
     loadPortfolio();
     timer = setInterval(loadPortfolio, 10000);
-    return () => clearInterval(timer);
+    const onUpdated = () => {
+      loadPortfolio();
+    };
+    window.addEventListener("portfolio:updated", onUpdated);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("portfolio:updated", onUpdated);
+    };
   }, []);
 
   return (

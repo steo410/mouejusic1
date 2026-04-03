@@ -1,16 +1,16 @@
 import { requireUser } from "@/lib/auth";
 import { getQuote } from "@/lib/finance";
-import { addTrade, getAccount, getHolding, setCash, upsertHolding } from "@/lib/demo-db";
-import { buyCost, MIN_BUY_KRW } from "@/lib/trade";
+import { addTrade, getAccount, getAdminUser, getHolding, setCash, upsertHolding } from "@/lib/demo-db";
+import { buyCost } from "@/lib/trade";
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
   const user = await requireUser();
   if (!user) return NextResponse.json({ message: "로그인이 필요합니다." }, { status: 401 });
 
-  const { symbol, amountKrw } = await req.json();
-  if (!symbol || amountKrw < MIN_BUY_KRW) {
-    return NextResponse.json({ message: "최소 매수 금액은 1,000원입니다." }, { status: 400 });
+  const { symbol, quantity } = await req.json();
+  if (!symbol || !Number.isInteger(quantity) || quantity <= 0) {
+    return NextResponse.json({ message: "매수 수량은 1 이상의 정수여야 합니다." }, { status: 400 });
   }
 
   const account = getAccount(user.id);
@@ -22,7 +22,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "현재가 조회 실패" }, { status: 502 });
   }
 
-  const quantity = amountKrw / price;
+  const amountKrw = price * quantity;
   const { fee, total } = buyCost(amountKrw);
   if (account.cashBalance < total) {
     return NextResponse.json({ message: "현금 잔고가 부족합니다." }, { status: 400 });
@@ -34,9 +34,18 @@ export async function POST(req: Request) {
   const newQty = oldQty + quantity;
   const newAvg = oldQty === 0 ? price : (oldQty * oldAvg + quantity * price) / newQty;
 
-  setCash(user.id, account.cashBalance - total);
+  const nextCash = account.cashBalance - total;
+  setCash(user.id, nextCash);
   upsertHolding(user.id, symbol, newQty, newAvg);
   addTrade({ userId: user.id, symbol, side: "BUY", price, quantity, fee });
 
-  return NextResponse.json({ message: "매수 완료", symbol, price, quantity, fee, cashBalance: account.cashBalance - total });
+  const admin = getAdminUser();
+  if (admin && admin.id !== user.id) {
+    const adminAccount = getAccount(admin.id);
+    if (adminAccount) {
+      setCash(admin.id, adminAccount.cashBalance + fee);
+    }
+  }
+
+  return NextResponse.json({ message: "매수 완료", symbol, price, quantity, fee, cashBalance: nextCash });
 }

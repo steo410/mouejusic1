@@ -1,5 +1,6 @@
 import { requireUser } from "@/lib/auth";
 import { getAccount, setCash } from "@/lib/demo-db";
+import { revalidatePath } from "next/cache";
 import { NextResponse } from "next/server";
 
 export async function POST(req: Request) {
@@ -18,5 +19,10 @@ export async function POST(req: Request) {
   if (!account) return NextResponse.json({ message: "대상 유저 계좌를 찾지 못했습니다." }, { status: 404 });
 
   setCash(String(userId), account.cashBalance + gift);
-  return NextResponse.json({ message: "선물 지급 완료", userId: String(userId), amount: gift });
+  revalidatePath("/admin");
+  revalidatePath("/mypage");
+  return NextResponse.json(
+    { message: "선물 지급 완료", userId: String(userId), amount: gift },
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }

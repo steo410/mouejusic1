@@ -22,7 +22,7 @@ export function PortfolioTable() {
   const [sellQty, setSellQty] = useState<Record<string, string>>({});
 
   async function loadPortfolio() {
-    const res = await fetch("/api/portfolio");
+    const res = await fetch("/api/portfolio", { cache: "no-store" });
     const body = await res.json();
     if (!res.ok) {
       setMessage(body.message ?? "조회 실패");
@@ -33,19 +33,24 @@ export function PortfolioTable() {
   }
 
   async function sell(symbol: string) {
-    const quantity = Number(sellQty[symbol] ?? "1");
-    const res = await fetch("/api/trade/sell", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ symbol, quantity })
-    });
-    const body = await res.json();
-    if (!res.ok) {
-      setMessage(body.message ?? "매도 실패");
-      return;
+    try {
+      const quantity = Number(sellQty[symbol] ?? "1");
+      const res = await fetch("/api/trade/sell", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, quantity }),
+        cache: "no-store"
+      });
+      const body = await res.json();
+      if (!res.ok) {
+        setMessage(body.message ?? "매도 실패");
+        return;
+      }
+      setMessage(body.message ?? "매도 완료");
+      window.location.reload();
+    } catch {
+      setMessage("매도 요청 중 오류가 발생했습니다.");
     }
-    setMessage(body.message ?? "매도 완료");
-    await loadPortfolio();
   }
 
   useEffect(() => {

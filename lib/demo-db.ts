@@ -98,6 +98,10 @@ export function findUserById(userId: string) {
   return getStore().users.find((u) => u.id === userId) ?? null;
 }
 
+export function getAdminUser() {
+  return getStore().users.find((u) => u.isAdmin) ?? null;
+}
+
 export function createSession(userId: string) {
   const token = crypto.randomUUID();
   getStore().sessions.push({ token, userId, createdAt: new Date().toISOString() });

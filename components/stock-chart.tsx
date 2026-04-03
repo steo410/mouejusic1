@@ -46,9 +46,13 @@ export function StockChart({ symbol }: { symbol: string }) {
     }),
     datasets: [{ label: symbol, data: points.map((p) => p.c), borderColor: "#818cf8" }]
   };
+  const currentPrice = [...points].reverse().find((p) => Number.isFinite(p.c) && p.c > 0)?.c ?? 0;
 
   return (
     <section className="rounded-lg border border-slate-800 p-4">
+      <p className="mb-3 text-sm text-slate-300">
+        현재가: {currentPrice > 0 ? `${Math.round(currentPrice).toLocaleString()}원` : "조회 실패"}
+      </p>
       <div className="mb-3 flex gap-2">
         {(["1d", "5d", "1mo"] as const).map((r) => (
           <button key={r} onClick={() => setRange(r)} className="rounded border border-slate-600 px-2 py-1 text-sm">

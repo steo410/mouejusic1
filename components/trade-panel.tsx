@@ -11,10 +11,12 @@ export function TradePanel({ symbol }: { symbol: string }) {
       const res = await fetch("/api/trade/buy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol, quantity: Number(buyQty) })
+        body: JSON.stringify({ symbol, quantity: Number(buyQty) }),
+        cache: "no-store"
       });
       const data = await res.json();
       setMsg(data.message || (res.ok ? "매수 완료" : "매수 실패"));
+      if (res.ok) window.location.reload();
     } catch {
       setMsg("매수 요청 중 오류가 발생했습니다.");
     }

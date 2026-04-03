@@ -16,12 +16,15 @@ export function TradesTable() {
   const [rows, setRows] = useState<Row[]>([]);
 
   useEffect(() => {
+    let timer: NodeJS.Timeout;
     async function load() {
-      const res = await fetch("/api/trades");
+      const res = await fetch("/api/trades", { cache: "no-store" });
       if (!res.ok) return;
       setRows(await res.json());
     }
     load();
+    timer = setInterval(load, 10000);
+    return () => clearInterval(timer);
   }, []);
 
   return (

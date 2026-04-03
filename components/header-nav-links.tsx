@@ -12,7 +12,7 @@ export function HeaderNavLinks() {
 
   useEffect(() => {
     async function load() {
-      const res = await fetch("/api/me");
+      const res = await fetch("/api/me", { cache: "no-store" });
       setMe(await res.json());
     }
     load();

@@ -16,7 +16,7 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip,
 
 export function StockChart({ symbol }: { symbol: string }) {
   const [range, setRange] = useState<"1d" | "5d" | "1mo">("1d");
-  const [points, setPoints] = useState<{ t: string; c: number }[]>([]);
+  const [points, setPoints] = useState<{ ts: string; c: number }[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -38,7 +38,12 @@ export function StockChart({ symbol }: { symbol: string }) {
   }, [symbol, range]);
 
   const data = {
-    labels: points.map((p) => p.t),
+    labels: points.map((p) => {
+      const date = new Date(p.ts);
+      return range === "1d"
+        ? date.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })
+        : date.toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" });
+    }),
     datasets: [{ label: symbol, data: points.map((p) => p.c), borderColor: "#818cf8" }]
   };
 

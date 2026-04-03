@@ -49,7 +49,7 @@ type ChartResponse = {
 };
 
 export async function getChart(symbol: string, range: "1d" | "5d" | "1mo") {
-  const interval = range === "1d" ? "5m" : range === "5d" ? "30m" : "1d";
+  const interval = range === "1d" ? "5m" : "1d";
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`;
   const data = await fetchJson<ChartResponse>(url);
   const result = data.chart?.result?.[0];

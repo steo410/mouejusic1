@@ -17,7 +17,7 @@ export function SessionBadge() {
 
   async function logout() {
     await fetch("/api/logout", { method: "POST" });
-    await load();
+    window.location.href = "/";
   }
 
   useEffect(() => {

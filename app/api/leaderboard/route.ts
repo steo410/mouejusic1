@@ -2,6 +2,8 @@ import { getAccount, listHoldings, listUsers } from "@/lib/demo-db";
 import { getQuote } from "@/lib/finance";
 import { NextResponse } from "next/server";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const users = listUsers().filter((u) => !u.isAdmin);
   if (users.length === 0) return NextResponse.json({ nickname: "-", totalAsset: 0 });
@@ -27,5 +29,5 @@ export async function GET() {
   );
 
   ranking.sort((a, b) => b.totalAsset - a.totalAsset);
-  return NextResponse.json(ranking[0]);
+  return NextResponse.json(ranking[0], { headers: { "Cache-Control": "no-store" } });
 }

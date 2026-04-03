@@ -125,6 +125,25 @@ export function findUserById(userId: string) {
   return getStore().users.find((u) => u.id === userId) ?? null;
 }
 
+export function upsertUserFromClaims(input: { id: string; username: string; nickname: string; isAdmin?: boolean }) {
+  const store = getStore();
+  const existing = findUserById(input.id);
+  if (existing) return existing;
+
+  const user: User = {
+    id: input.id,
+    username: input.username,
+    passwordHash: "",
+    nickname: input.nickname,
+    isAdmin: input.isAdmin ?? false,
+    createdAt: new Date().toISOString()
+  };
+  store.users.push(user);
+  store.accounts.push({ userId: user.id, cashBalance: user.isAdmin ? 10_000_000 : 1_000_000 });
+  persistStore(store);
+  return user;
+}
+
 export function getAdminUser() {
   return getStore().users.find((u) => u.isAdmin) ?? null;
 }
@@ -145,7 +164,17 @@ export function getUserBySession(token: string) {
 }
 
 export function getAccount(userId: string) {
-  return getStore().accounts.find((a) => a.userId === userId) ?? null;
+  const store = getStore();
+  const existing = store.accounts.find((a) => a.userId === userId);
+  if (existing) return existing;
+
+  const user = findUserById(userId);
+  if (!user) return null;
+
+  const account: Account = { userId, cashBalance: user.isAdmin ? 10_000_000 : 1_000_000 };
+  store.accounts.push(account);
+  persistStore(store);
+  return account;
 }
 
 export function setCash(userId: string, cashBalance: number) {

@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { createSession, createUser } from "@/lib/demo-db";
+import { createUser } from "@/lib/demo-db";
 import { SESSION_COOKIE } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -27,8 +27,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "이미 존재하는 아이디입니다." }, { status: 409 });
   }
 
-  const token = createSession(user.id);
   const res = NextResponse.json({ message: "회원가입 완료", user: { id: user.id, nickname: user.nickname } });
-  res.cookies.set(SESSION_COOKIE, token, { httpOnly: true, sameSite: "lax", path: "/" });
+  res.cookies.set(SESSION_COOKIE, user.id, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30 });
   return res;
 }

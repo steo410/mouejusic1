@@ -1,8 +1,10 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export function AdminGiftForm({ userId }: { userId: string }) {
+  const router = useRouter();
   const [amount, setAmount] = useState("100000");
   const [message, setMessage] = useState("");
 
@@ -16,7 +18,7 @@ export function AdminGiftForm({ userId }: { userId: string }) {
       });
       const body = await res.json();
       setMessage(body.message ?? (res.ok ? "선물 지급 완료" : "선물 지급 실패"));
-      if (res.ok) window.location.reload();
+      if (res.ok) router.refresh();
     } catch {
       setMessage("선물 지급 요청 중 오류가 발생했습니다.");
     }

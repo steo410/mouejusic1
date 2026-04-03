@@ -1,8 +1,10 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 export function TradePanel({ symbol }: { symbol: string }) {
+  const router = useRouter();
   const [buyQty, setBuyQty] = useState("1");
   const [msg, setMsg] = useState("");
 
@@ -16,7 +18,10 @@ export function TradePanel({ symbol }: { symbol: string }) {
       });
       const data = await res.json();
       setMsg(data.message || (res.ok ? "매수 완료" : "매수 실패"));
-      if (res.ok) window.location.reload();
+      if (res.ok) {
+        window.dispatchEvent(new Event("portfolio:updated"));
+        router.refresh();
+      }
     } catch {
       setMsg("매수 요청 중 오류가 발생했습니다.");
     }

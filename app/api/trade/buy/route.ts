@@ -1,5 +1,5 @@
 import { requireUser } from "@/lib/auth";
-import { getQuote } from "@/lib/finance";
+import { getChart, getQuote } from "@/lib/finance";
 import { addTrade, getAccount, getAdminUser, getHolding, setCash, upsertHolding } from "@/lib/demo-db";
 import { buyCost } from "@/lib/trade";
 import { NextResponse } from "next/server";
@@ -9,15 +9,26 @@ export async function POST(req: Request) {
   if (!user) return NextResponse.json({ message: "로그인이 필요합니다." }, { status: 401 });
 
   const { symbol, quantity } = await req.json();
-  if (!symbol || !Number.isInteger(quantity) || quantity <= 0) {
+  const normalizedSymbol = String(symbol || "").toUpperCase();
+  if (!normalizedSymbol || !Number.isInteger(quantity) || quantity <= 0) {
     return NextResponse.json({ message: "매수 수량은 1 이상의 정수여야 합니다." }, { status: 400 });
   }
 
   const account = getAccount(user.id);
   if (!account) return NextResponse.json({ message: "계좌 정보가 없습니다." }, { status: 400 });
 
-  const quote = await getQuote(symbol);
-  const price = Number(quote.regularMarketPrice);
+  let price = 0;
+  try {
+    const quote = await getQuote(normalizedSymbol);
+    price = Number(quote.regularMarketPrice);
+  } catch {
+    try {
+      const chart = await getChart(normalizedSymbol, "1d");
+      price = [...chart.quotes].reverse().find((x) => Number.isFinite(x.close) && (x.close ?? 0) > 0)?.close ?? 0;
+    } catch {
+      return NextResponse.json({ message: "현재가 조회 실패" }, { status: 502 });
+    }
+  }
   if (!Number.isFinite(price) || price <= 0) {
     return NextResponse.json({ message: "현재가 조회 실패" }, { status: 502 });
   }
@@ -28,7 +39,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "현금 잔고가 부족합니다." }, { status: 400 });
   }
 
-  const old = getHolding(user.id, symbol);
+  const old = getHolding(user.id, normalizedSymbol);
   const oldQty = old?.quantity ?? 0;
   const oldAvg = old?.avgBuyPrice ?? 0;
   const newQty = oldQty + quantity;
@@ -36,8 +47,8 @@ export async function POST(req: Request) {
 
   const nextCash = account.cashBalance - total;
   setCash(user.id, nextCash);
-  upsertHolding(user.id, symbol, newQty, newAvg);
-  addTrade({ userId: user.id, symbol, side: "BUY", price, quantity, fee });
+  upsertHolding(user.id, normalizedSymbol, newQty, newAvg);
+  addTrade({ userId: user.id, symbol: normalizedSymbol, side: "BUY", price, quantity, fee });
 
   const admin = getAdminUser();
   if (admin && admin.id !== user.id) {
@@ -47,5 +58,5 @@ export async function POST(req: Request) {
     }
   }
 
-  return NextResponse.json({ message: "매수 완료", symbol, price, quantity, fee, cashBalance: nextCash });
+  return NextResponse.json({ message: "매수 완료", symbol: normalizedSymbol, price, quantity, fee, cashBalance: nextCash });
 }

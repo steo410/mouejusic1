@@ -3,7 +3,7 @@ import { getQuote } from "@/lib/finance";
 import { NextResponse } from "next/server";
 
 export async function GET() {
-  const users = listUsers();
+  const users = listUsers().filter((u) => !u.isAdmin);
   if (users.length === 0) return NextResponse.json({ nickname: "-", totalAsset: 0 });
 
   const ranking = await Promise.all(

@@ -9,7 +9,7 @@ export async function GET(req: Request) {
 
   try {
     const chart = await getChart(symbol, range);
-    const result = chart.quotes.map((q) => ({ t: new Date(q.date).toLocaleTimeString("ko-KR"), c: q.close ?? 0 }));
+    const result = chart.quotes.map((q) => ({ ts: q.date.toISOString(), c: q.close ?? 0 }));
     return NextResponse.json({ points: result });
   } catch {
     return NextResponse.json({ message: "가격 데이터를 불러오지 못했습니다." }, { status: 502 });

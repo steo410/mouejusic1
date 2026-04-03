@@ -24,7 +24,14 @@ export function TradesTable() {
     }
     load();
     timer = setInterval(load, 10000);
-    return () => clearInterval(timer);
+    const onUpdated = () => {
+      load();
+    };
+    window.addEventListener("portfolio:updated", onUpdated);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("portfolio:updated", onUpdated);
+    };
   }, []);
 
   return (

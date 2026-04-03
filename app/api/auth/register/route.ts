@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { createUser } from "@/lib/demo-db";
-import { SESSION_COOKIE } from "@/lib/auth";
+import { encodeSessionUser, SESSION_COOKIE } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -28,6 +28,7 @@ export async function POST(req: Request) {
   }
 
   const res = NextResponse.json({ message: "회원가입 완료", user: { id: user.id, nickname: user.nickname } });
-  res.cookies.set(SESSION_COOKIE, user.id, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30 });
+  const token = encodeSessionUser({ id: user.id, username: user.username, nickname: user.nickname, isAdmin: user.isAdmin ?? false });
+  res.cookies.set(SESSION_COOKIE, token, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30 });
   return res;
 }

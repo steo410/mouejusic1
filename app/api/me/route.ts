@@ -8,7 +8,7 @@ export async function GET() {
 
   const account = getAccount(user.id);
   return NextResponse.json({
-    user: { id: user.id, username: user.username, nickname: user.nickname },
+    user: { id: user.id, username: user.username, nickname: user.nickname, isAdmin: user.isAdmin ?? false },
     cashBalance: account?.cashBalance ?? 0
   });
 }

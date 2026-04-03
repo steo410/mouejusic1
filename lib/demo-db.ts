@@ -1,5 +1,7 @@
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
+import fs from "fs";
+import path from "path";
 
 export type User = {
   id: string;
@@ -49,8 +51,38 @@ declare global {
   var __stockSimStore: Store | undefined;
 }
 
+const DATA_DIR = path.join(process.cwd(), ".data");
+const DATA_FILE = path.join(DATA_DIR, "demo-db.json");
+
+function persistStore(store: Store) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(DATA_FILE, JSON.stringify(store), "utf8");
+}
+
+function loadStoreFromDisk(): Store | null {
+  try {
+    if (!fs.existsSync(DATA_FILE)) return null;
+    const raw = fs.readFileSync(DATA_FILE, "utf8");
+    if (!raw) return null;
+    return JSON.parse(raw) as Store;
+  } catch {
+    return null;
+  }
+}
+
 function getStore(): Store {
   if (!global.__stockSimStore) {
+    global.__stockSimStore = loadStoreFromDisk() ?? {
+      users: [],
+      accounts: [],
+      holdings: [],
+      trades: [],
+      sessions: [],
+      nextTradeId: 1
+    };
+  }
+
+  if (!global.__stockSimStore.users.some((u) => u.isAdmin)) {
     const now = new Date().toISOString();
     const masterUser: User = {
       id: crypto.randomUUID(),
@@ -60,15 +92,9 @@ function getStore(): Store {
       isAdmin: true,
       createdAt: now
     };
-
-    global.__stockSimStore = {
-      users: [masterUser],
-      accounts: [{ userId: masterUser.id, cashBalance: 10_000_000 }],
-      holdings: [],
-      trades: [],
-      sessions: [],
-      nextTradeId: 1
-    };
+    global.__stockSimStore.users.push(masterUser);
+    global.__stockSimStore.accounts.push({ userId: masterUser.id, cashBalance: 10_000_000 });
+    persistStore(global.__stockSimStore);
   }
   return global.__stockSimStore;
 }
@@ -87,6 +113,7 @@ export function createUser(input: { username: string; passwordHash: string; nick
 
   store.users.push(user);
   store.accounts.push({ userId: user.id, cashBalance: 1_000_000 });
+  persistStore(store);
   return user;
 }
 
@@ -104,7 +131,9 @@ export function getAdminUser() {
 
 export function createSession(userId: string) {
   const token = crypto.randomUUID();
-  getStore().sessions.push({ token, userId, createdAt: new Date().toISOString() });
+  const store = getStore();
+  store.sessions.push({ token, userId, createdAt: new Date().toISOString() });
+  persistStore(store);
   return token;
 }
 
@@ -120,9 +149,11 @@ export function getAccount(userId: string) {
 }
 
 export function setCash(userId: string, cashBalance: number) {
+  const store = getStore();
   const account = getAccount(userId);
   if (!account) return;
   account.cashBalance = cashBalance;
+  persistStore(store);
 }
 
 export function getHolding(userId: string, symbol: string) {
@@ -135,14 +166,17 @@ export function upsertHolding(userId: string, symbol: string, quantity: number, 
   if (existing) {
     existing.quantity = quantity;
     existing.avgBuyPrice = avgBuyPrice;
+    persistStore(store);
     return;
   }
   store.holdings.push({ userId, symbol, quantity, avgBuyPrice });
+  persistStore(store);
 }
 
 export function removeHolding(userId: string, symbol: string) {
   const store = getStore();
   store.holdings = store.holdings.filter((h) => !(h.userId === userId && h.symbol === symbol));
+  persistStore(store);
 }
 
 export function listHoldings(userId: string) {
@@ -157,6 +191,7 @@ export function addTrade(input: Omit<Trade, "id" | "tradedAt">) {
     tradedAt: new Date().toISOString()
   };
   store.trades.push(t);
+  persistStore(store);
   return t;
 }
 

@@ -7,13 +7,17 @@ export function TradePanel({ symbol }: { symbol: string }) {
   const [msg, setMsg] = useState("");
 
   async function buy() {
-    const res = await fetch("/api/trade/buy", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ symbol, quantity: Number(buyQty) })
-    });
-    const data = await res.json();
-    setMsg(data.message || (res.ok ? "매수 완료" : "매수 실패"));
+    try {
+      const res = await fetch("/api/trade/buy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol, quantity: Number(buyQty) })
+      });
+      const data = await res.json();
+      setMsg(data.message || (res.ok ? "매수 완료" : "매수 실패"));
+    } catch {
+      setMsg("매수 요청 중 오류가 발생했습니다.");
+    }
   }
 
   return (

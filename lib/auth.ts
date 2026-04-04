@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { findUserById, upsertUserFromClaims } from "@/lib/demo-db";
+import { findUserById } from "@/lib/demo-db";
 
 export const SESSION_COOKIE = "stocksim_session";
 
@@ -33,7 +33,7 @@ export async function requireUser() {
   if (!claims) return null;
 
   const user = await findUserById(claims.id);
-  if (user) return user;
+  if (!user) return null;
 
-  return upsertUserFromClaims(claims);
+  return user;
 }

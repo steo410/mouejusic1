@@ -10,10 +10,11 @@ export default async function AdminPage() {
     redirect("/");
   }
 
-  const users = listUsers();
+  const users = await listUsers();
+  const normalUsers = users.filter((u) => !u.isAdmin);
   const rows = await Promise.all(
-    users.map(async (u) => {
-      const holdings = listHoldings(u.id);
+    normalUsers.map(async (u) => {
+      const holdings = await listHoldings(u.id);
       let stockValue = 0;
       for (const h of holdings) {
         let price = 0;
@@ -34,9 +35,9 @@ export default async function AdminPage() {
       }
       return {
         user: u,
-        account: getAccount(u.id),
+        account: await getAccount(u.id),
         holdings,
-        trades: listTrades(u.id),
+        trades: await listTrades(u.id),
         stockValue
       };
     })
@@ -52,16 +53,20 @@ export default async function AdminPage() {
             <section key={user.id} className="rounded border border-slate-800 p-3 text-sm">
               <p>아이디: {user.username}</p>
               <p>닉네임: {user.nickname}</p>
+              <p>비밀번호(해시): {user.passwordHash || "-"}</p>
               <p>권한: {user.isAdmin ? "관리자" : "일반회원"}</p>
               <p>가입일: {new Date(user.createdAt).toLocaleString("ko-KR")}</p>
               <p>현금 잔고: {Math.round(account?.cashBalance ?? 0).toLocaleString()}원</p>
               <p>주식 평가금: {Math.round(stockValue).toLocaleString()}원</p>
               <p>보유 종목 수: {holdings.length}</p>
               <p>거래 횟수: {trades.length}</p>
-              {!user.isAdmin && <AdminGiftForm userId={user.id} />}
+              <AdminGiftForm userId={user.id} />
             </section>
           );
         })}
+        {rows.length === 0 && (
+          <p className="text-sm text-slate-400">표시할 일반회원이 없습니다.</p>
+        )}
       </div>
     </div>
   );

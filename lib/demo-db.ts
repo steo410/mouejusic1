@@ -206,6 +206,23 @@ export async function findUserByUsername(username: string): Promise<User | null>
   return data ? toUser(data as UserRow) : null;
 }
 
+export async function updateUserCredentialsIfNoPassword(input: { username: string; passwordHash: string; nickname: string }): Promise<User | null> {
+  await ensureAdminUser();
+  const existing = await findUserByUsername(input.username);
+  if (!existing) return null;
+  if (existing.passwordHash) return null;
+
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("users")
+    .update({ password_hash: input.passwordHash, nickname: input.nickname })
+    .eq("id", existing.id)
+    .select("id,username,password_hash,nickname,is_admin,created_at")
+    .single();
+  if (error) throw error;
+  return toUser(data as UserRow);
+}
+
 export async function findUserById(userId: string): Promise<User | null> {
   await ensureAdminUser();
   const db = getSupabaseAdmin();

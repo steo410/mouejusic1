@@ -1,7 +1,5 @@
-import crypto from "crypto";
 import bcrypt from "bcryptjs";
-import fs from "fs";
-import path from "path";
+import { getSupabaseAdmin } from "@/lib/supabase-admin";
 
 export type User = {
   id: string;
@@ -35,204 +33,357 @@ export type Trade = {
   tradedAt: string;
 };
 
-type Session = { token: string; userId: string; createdAt: string };
-
-type Store = {
-  users: User[];
-  accounts: Account[];
-  holdings: Holding[];
-  trades: Trade[];
-  sessions: Session[];
-  nextTradeId: number;
+type UserRow = {
+  id: string;
+  username: string;
+  password_hash: string;
+  nickname: string;
+  is_admin: boolean;
+  created_at: string;
 };
 
-declare global {
-  // eslint-disable-next-line no-var
-  var __stockSimStore: Store | undefined;
-}
+type AccountRow = {
+  user_id: string;
+  cash_balance: number | string;
+};
 
-const DATA_DIR = path.join(process.cwd(), ".data");
-const DATA_FILE = path.join(DATA_DIR, "demo-db.json");
+type HoldingRow = {
+  user_id: string;
+  symbol: string;
+  quantity: number;
+  avg_buy_price: number | string;
+};
 
-function persistStore(store: Store) {
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify(store), "utf8");
-  } catch {
-    // 일부 배포 환경(읽기 전용 파일시스템)에서는 디스크 저장이 실패할 수 있으므로
-    // 메모리 스토어만으로 계속 동작하도록 예외를 삼킨다.
-  }
-}
+type TradeRow = {
+  id: number;
+  user_id: string;
+  symbol: string;
+  side: "BUY" | "SELL";
+  price: number | string;
+  quantity: number;
+  fee: number | string;
+  traded_at: string;
+};
 
-function loadStoreFromDisk(): Store | null {
-  try {
-    if (!fs.existsSync(DATA_FILE)) return null;
-    const raw = fs.readFileSync(DATA_FILE, "utf8");
-    if (!raw) return null;
-    return JSON.parse(raw) as Store;
-  } catch {
-    return null;
-  }
-}
+const ADMIN_USERNAME = "steo410";
+const ADMIN_PASSWORD = "steojhukna";
+const ADMIN_NICKNAME = "CM sj";
+const ADMIN_SEED_CASH = 10_000_000;
+const USER_SEED_CASH = 1_000_000;
 
-function getStore(): Store {
-  if (!global.__stockSimStore) {
-    global.__stockSimStore = loadStoreFromDisk() ?? {
-      users: [],
-      accounts: [],
-      holdings: [],
-      trades: [],
-      sessions: [],
-      nextTradeId: 1
-    };
-  }
+let adminReady: Promise<void> | null = null;
 
-  if (!global.__stockSimStore.users.some((u) => u.isAdmin)) {
-    const now = new Date().toISOString();
-    const masterUser: User = {
-      id: crypto.randomUUID(),
-      username: "steo410",
-      passwordHash: bcrypt.hashSync("steojhukna", 10),
-      nickname: "CM sj",
-      isAdmin: true,
-      createdAt: now
-    };
-    global.__stockSimStore.users.push(masterUser);
-    global.__stockSimStore.accounts.push({ userId: masterUser.id, cashBalance: 10_000_000 });
-    persistStore(global.__stockSimStore);
-  }
-  return global.__stockSimStore;
-}
-
-export function createUser(input: { username: string; passwordHash: string; nickname: string }) {
-  const store = getStore();
-  if (store.users.some((u) => u.username === input.username)) return null;
-
-  const user: User = {
-    id: crypto.randomUUID(),
-    username: input.username,
-    passwordHash: input.passwordHash,
-    nickname: input.nickname,
-    createdAt: new Date().toISOString()
+function toUser(row: UserRow): User {
+  return {
+    id: row.id,
+    username: row.username,
+    passwordHash: row.password_hash,
+    nickname: row.nickname,
+    isAdmin: row.is_admin,
+    createdAt: row.created_at
   };
-
-  store.users.push(user);
-  store.accounts.push({ userId: user.id, cashBalance: 1_000_000 });
-  persistStore(store);
-  return user;
 }
 
-export function findUserByUsername(username: string) {
-  return getStore().users.find((u) => u.username === username) ?? null;
+function toAccount(row: AccountRow): Account {
+  return {
+    userId: row.user_id,
+    cashBalance: Number(row.cash_balance)
+  };
 }
 
-export function findUserById(userId: string) {
-  return getStore().users.find((u) => u.id === userId) ?? null;
+function toHolding(row: HoldingRow): Holding {
+  return {
+    userId: row.user_id,
+    symbol: row.symbol,
+    quantity: row.quantity,
+    avgBuyPrice: Number(row.avg_buy_price)
+  };
 }
 
-export function upsertUserFromClaims(input: { id: string; username: string; nickname: string; isAdmin?: boolean }) {
-  const store = getStore();
-  const existing = findUserById(input.id);
+function toTrade(row: TradeRow): Trade {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    symbol: row.symbol,
+    side: row.side,
+    price: Number(row.price),
+    quantity: row.quantity,
+    fee: Number(row.fee),
+    tradedAt: row.traded_at
+  };
+}
+
+async function ensureAdminUser() {
+  if (!adminReady) {
+    adminReady = (async () => {
+      const db = getSupabaseAdmin();
+      const { data: existing, error: readError } = await db
+        .from("users")
+        .select("id")
+        .eq("is_admin", true)
+        .limit(1)
+        .maybeSingle();
+      if (readError) throw readError;
+      if (existing) return;
+
+      const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+      const { data: inserted, error: insertError } = await db
+        .from("users")
+        .insert({
+          username: ADMIN_USERNAME,
+          password_hash: passwordHash,
+          nickname: ADMIN_NICKNAME,
+          is_admin: true
+        })
+        .select("id")
+        .single();
+      if (insertError) throw insertError;
+
+      const { error: accountError } = await db
+        .from("accounts")
+        .upsert({ user_id: inserted.id, cash_balance: ADMIN_SEED_CASH }, { onConflict: "user_id" });
+      if (accountError) throw accountError;
+    })();
+  }
+  await adminReady;
+}
+
+async function ensureUserAccount(userId: string, isAdmin: boolean) {
+  const db = getSupabaseAdmin();
+  const { data: account, error } = await db
+    .from("accounts")
+    .select("user_id,cash_balance")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (account) return toAccount(account as AccountRow);
+
+  const seedCash = isAdmin ? ADMIN_SEED_CASH : USER_SEED_CASH;
+  const { data: inserted, error: upsertError } = await db
+    .from("accounts")
+    .upsert({ user_id: userId, cash_balance: seedCash }, { onConflict: "user_id" })
+    .select("user_id,cash_balance")
+    .single();
+  if (upsertError) throw upsertError;
+  return toAccount(inserted as AccountRow);
+}
+
+export async function createUser(input: { username: string; passwordHash: string; nickname: string }): Promise<User | null> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+
+  const { data, error } = await db
+    .from("users")
+    .insert({
+      username: input.username,
+      password_hash: input.passwordHash,
+      nickname: input.nickname,
+      is_admin: false
+    })
+    .select("id,username,password_hash,nickname,is_admin,created_at")
+    .maybeSingle();
+
+  if (error) {
+    if (error.code === "23505") return null;
+    throw error;
+  }
+  if (!data) return null;
+
+  await ensureUserAccount(data.id, false);
+  return toUser(data as UserRow);
+}
+
+export async function findUserByUsername(username: string): Promise<User | null> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+
+  const { data, error } = await db
+    .from("users")
+    .select("id,username,password_hash,nickname,is_admin,created_at")
+    .eq("username", username)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? toUser(data as UserRow) : null;
+}
+
+export async function findUserById(userId: string): Promise<User | null> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+
+  const { data, error } = await db
+    .from("users")
+    .select("id,username,password_hash,nickname,is_admin,created_at")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? toUser(data as UserRow) : null;
+}
+
+export async function upsertUserFromClaims(input: { id: string; username: string; nickname: string; isAdmin?: boolean }): Promise<User> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+
+  const existing = await findUserById(input.id);
   if (existing) return existing;
 
-  const user: User = {
-    id: input.id,
-    username: input.username,
-    passwordHash: "",
-    nickname: input.nickname,
-    isAdmin: input.isAdmin ?? false,
-    createdAt: new Date().toISOString()
-  };
-  store.users.push(user);
-  store.accounts.push({ userId: user.id, cashBalance: user.isAdmin ? 10_000_000 : 1_000_000 });
-  persistStore(store);
-  return user;
+  const { data, error } = await db
+    .from("users")
+    .upsert(
+      {
+        id: input.id,
+        username: input.username,
+        password_hash: "",
+        nickname: input.nickname,
+        is_admin: input.isAdmin ?? false
+      },
+      { onConflict: "id" }
+    )
+    .select("id,username,password_hash,nickname,is_admin,created_at")
+    .single();
+  if (error) throw error;
+
+  await ensureUserAccount(data.id, data.is_admin);
+  return toUser(data as UserRow);
 }
 
-export function getAdminUser() {
-  return getStore().users.find((u) => u.isAdmin) ?? null;
+export async function getAdminUser(): Promise<User | null> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("users")
+    .select("id,username,password_hash,nickname,is_admin,created_at")
+    .eq("is_admin", true)
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? toUser(data as UserRow) : null;
 }
 
-export function createSession(userId: string) {
-  const token = crypto.randomUUID();
-  const store = getStore();
-  store.sessions.push({ token, userId, createdAt: new Date().toISOString() });
-  persistStore(store);
-  return token;
+export async function createSession(userId: string): Promise<string> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("sessions")
+    .insert({ user_id: userId })
+    .select("token")
+    .single();
+  if (error) throw error;
+  return String(data.token);
 }
 
-export function getUserBySession(token: string) {
-  const store = getStore();
-  const s = store.sessions.find((x) => x.token === token);
-  if (!s) return null;
-  return findUserById(s.userId);
+export async function getUserBySession(token: string): Promise<User | null> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("sessions")
+    .select("user_id")
+    .eq("token", token)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data?.user_id) return null;
+  return findUserById(String(data.user_id));
 }
 
-export function getAccount(userId: string) {
-  const store = getStore();
-  const existing = store.accounts.find((a) => a.userId === userId);
-  if (existing) return existing;
-
-  const user = findUserById(userId);
+export async function getAccount(userId: string): Promise<Account | null> {
+  await ensureAdminUser();
+  const user = await findUserById(userId);
   if (!user) return null;
-
-  const account: Account = { userId, cashBalance: user.isAdmin ? 10_000_000 : 1_000_000 };
-  store.accounts.push(account);
-  persistStore(store);
-  return account;
+  return ensureUserAccount(userId, user.isAdmin ?? false);
 }
 
-export function setCash(userId: string, cashBalance: number) {
-  const store = getStore();
-  const account = getAccount(userId);
-  if (!account) return;
-  account.cashBalance = cashBalance;
-  persistStore(store);
+export async function setCash(userId: string, cashBalance: number): Promise<void> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+  const { error } = await db
+    .from("accounts")
+    .upsert({ user_id: userId, cash_balance: cashBalance }, { onConflict: "user_id" });
+  if (error) throw error;
 }
 
-export function getHolding(userId: string, symbol: string) {
-  return getStore().holdings.find((h) => h.userId === userId && h.symbol === symbol) ?? null;
+export async function getHolding(userId: string, symbol: string): Promise<Holding | null> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("holdings")
+    .select("user_id,symbol,quantity,avg_buy_price")
+    .eq("user_id", userId)
+    .eq("symbol", symbol)
+    .maybeSingle();
+  if (error) throw error;
+  return data ? toHolding(data as HoldingRow) : null;
 }
 
-export function upsertHolding(userId: string, symbol: string, quantity: number, avgBuyPrice: number) {
-  const store = getStore();
-  const existing = getHolding(userId, symbol);
-  if (existing) {
-    existing.quantity = quantity;
-    existing.avgBuyPrice = avgBuyPrice;
-    persistStore(store);
-    return;
-  }
-  store.holdings.push({ userId, symbol, quantity, avgBuyPrice });
-  persistStore(store);
+export async function upsertHolding(userId: string, symbol: string, quantity: number, avgBuyPrice: number): Promise<void> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+  const { error } = await db.from("holdings").upsert(
+    {
+      user_id: userId,
+      symbol,
+      quantity,
+      avg_buy_price: avgBuyPrice
+    },
+    { onConflict: "user_id,symbol" }
+  );
+  if (error) throw error;
 }
 
-export function removeHolding(userId: string, symbol: string) {
-  const store = getStore();
-  store.holdings = store.holdings.filter((h) => !(h.userId === userId && h.symbol === symbol));
-  persistStore(store);
+export async function removeHolding(userId: string, symbol: string): Promise<void> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+  const { error } = await db.from("holdings").delete().eq("user_id", userId).eq("symbol", symbol);
+  if (error) throw error;
 }
 
-export function listHoldings(userId: string) {
-  return getStore().holdings.filter((h) => h.userId === userId);
+export async function listHoldings(userId: string): Promise<Holding[]> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("holdings")
+    .select("user_id,symbol,quantity,avg_buy_price")
+    .eq("user_id", userId);
+  if (error) throw error;
+  return (data ?? []).map((row: unknown) => toHolding(row as HoldingRow));
 }
 
-export function addTrade(input: Omit<Trade, "id" | "tradedAt">) {
-  const store = getStore();
-  const t: Trade = {
-    id: store.nextTradeId++,
-    ...input,
-    tradedAt: new Date().toISOString()
-  };
-  store.trades.push(t);
-  persistStore(store);
-  return t;
+export async function addTrade(input: Omit<Trade, "id" | "tradedAt">): Promise<Trade> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("trades")
+    .insert({
+      user_id: input.userId,
+      symbol: input.symbol,
+      side: input.side,
+      price: input.price,
+      quantity: input.quantity,
+      fee: input.fee
+    })
+    .select("id,user_id,symbol,side,price,quantity,fee,traded_at")
+    .single();
+  if (error) throw error;
+  return toTrade(data as TradeRow);
 }
 
-export function listUsers() {
-  return getStore().users;
+export async function listUsers(): Promise<User[]> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("users")
+    .select("id,username,password_hash,nickname,is_admin,created_at")
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map((row: unknown) => toUser(row as UserRow));
 }
 
-export function listTrades(userId: string) {
-  return getStore().trades.filter((t) => t.userId === userId).sort((a,b)=> b.id-a.id);
+export async function listTrades(userId: string): Promise<Trade[]> {
+  await ensureAdminUser();
+  const db = getSupabaseAdmin();
+  const { data, error } = await db
+    .from("trades")
+    .select("id,user_id,symbol,side,price,quantity,fee,traded_at")
+    .eq("user_id", userId)
+    .order("id", { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map((row: unknown) => toTrade(row as TradeRow));
 }

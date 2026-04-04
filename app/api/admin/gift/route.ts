@@ -15,10 +15,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "유효한 유저/금액을 입력해주세요." }, { status: 400 });
   }
 
-  const account = getAccount(String(userId));
+  const account = await getAccount(String(userId));
   if (!account) return NextResponse.json({ message: "대상 유저 계좌를 찾지 못했습니다." }, { status: 404 });
 
-  setCash(String(userId), account.cashBalance + gift);
+  await setCash(String(userId), account.cashBalance + gift);
   revalidatePath("/admin");
   revalidatePath("/mypage");
   return NextResponse.json(

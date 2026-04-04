@@ -13,10 +13,20 @@ export async function POST(req: Request) {
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return NextResponse.json({ message: "아이디/비밀번호를 입력해주세요." }, { status: 400 });
 
-  const user = await findUserByUsername(parsed.data.username);
+  const username = parsed.data.username.trim();
+  const user = await findUserByUsername(username);
   if (!user) return NextResponse.json({ message: "로그인 실패" }, { status: 401 });
 
-  const matched = await bcrypt.compare(parsed.data.password, user.passwordHash);
+  if (!user.passwordHash || !user.passwordHash.startsWith("$2")) {
+    return NextResponse.json({ message: "로그인 실패" }, { status: 401 });
+  }
+
+  let matched = false;
+  try {
+    matched = await bcrypt.compare(parsed.data.password, user.passwordHash);
+  } catch {
+    matched = false;
+  }
   if (!matched) return NextResponse.json({ message: "로그인 실패" }, { status: 401 });
 
   const res = NextResponse.json({ message: "로그인 성공", user: { id: user.id, nickname: user.nickname } });

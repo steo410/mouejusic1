@@ -5,13 +5,14 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const users = listUsers().filter((u) => !u.isAdmin);
+  const allUsers = await listUsers();
+  const users = allUsers.filter((u) => !u.isAdmin);
   if (users.length === 0) return NextResponse.json({ nickname: "-", totalAsset: 0 });
 
   const ranking = await Promise.all(
     users.map(async (u) => {
-      const account = getAccount(u.id);
-      const holdings = listHoldings(u.id);
+      const account = await getAccount(u.id);
+      const holdings = await listHoldings(u.id);
       let stockValue = 0;
       for (const h of holdings) {
         try {

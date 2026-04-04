@@ -42,10 +42,12 @@ export async function POST(req: Request) {
       sameSite: "lax",
       path: "/",
       maxAge: 60 * 60 * 24 * 30,
-      secure: process.env.NODE_ENV === "production", // ✅ 추가: HTTPS 환경에서 쿠키 저장 허용
+      secure: process.env.NODE_ENV === "production",
     });
     return res;
-  } catch {
-    return NextResponse.json({ message: "회원가입 처리 중 오류가 발생했습니다." }, { status: 500 });
+  } catch (err: unknown) {
+    // 실제 오류 내용을 응답에 포함 (원인 파악 후 다시 숨길 것)
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ message: `오류: ${message}` }, { status: 500 });
   }
 }

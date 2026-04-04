@@ -1,5 +1,5 @@
 import bcrypt from "bcryptjs";
-import { createUser } from "@/lib/demo-db";
+import { createUser, updateUserCredentialsIfNoPassword } from "@/lib/demo-db";
 import { encodeSessionUser, SESSION_COOKIE } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -16,12 +16,19 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "아이디 6자 이상, 비밀번호 8자 이상으로 입력해주세요." }, { status: 400 });
   }
 
+  const username = parsed.data.username.trim();
+  const nickname = parsed.data.nickname.trim();
   const passwordHash = await bcrypt.hash(parsed.data.password, 10);
-  const user = await createUser({
-    username: parsed.data.username,
+
+  let user = await createUser({
+    username,
     passwordHash,
-    nickname: parsed.data.nickname
+    nickname
   });
+
+  if (!user) {
+    user = await updateUserCredentialsIfNoPassword({ username, passwordHash, nickname });
+  }
 
   if (!user) {
     return NextResponse.json({ message: "이미 존재하는 아이디입니다." }, { status: 409 });

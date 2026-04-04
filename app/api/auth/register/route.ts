@@ -37,7 +37,13 @@ export async function POST(req: Request) {
 
     const res = NextResponse.json({ message: "회원가입 완료", user: { id: user.id, nickname: user.nickname } });
     const token = encodeSessionUser({ id: user.id, username: user.username, nickname: user.nickname, isAdmin: user.isAdmin ?? false });
-    res.cookies.set(SESSION_COOKIE, token, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30 });
+    res.cookies.set(SESSION_COOKIE, token, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+      secure: process.env.NODE_ENV === "production", // ✅ 추가: HTTPS 환경에서 쿠키 저장 허용
+    });
     return res;
   } catch {
     return NextResponse.json({ message: "회원가입 처리 중 오류가 발생했습니다." }, { status: 500 });

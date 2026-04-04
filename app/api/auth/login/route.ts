@@ -31,6 +31,12 @@ export async function POST(req: Request) {
 
   const res = NextResponse.json({ message: "로그인 성공", user: { id: user.id, nickname: user.nickname } });
   const token = encodeSessionUser({ id: user.id, username: user.username, nickname: user.nickname, isAdmin: user.isAdmin ?? false });
-  res.cookies.set(SESSION_COOKIE, token, { httpOnly: true, sameSite: "lax", path: "/", maxAge: 60 * 60 * 24 * 30 });
+  res.cookies.set(SESSION_COOKIE, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 24 * 30,
+    secure: process.env.NODE_ENV === "production", // ✅ 추가: HTTPS 환경에서 쿠키 저장 허용
+  });
   return res;
 }

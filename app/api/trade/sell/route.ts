@@ -15,8 +15,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "매도 수량은 1 이상의 정수여야 합니다." }, { status: 400 });
   }
 
-  const account = getAccount(user.id);
-  const holding = getHolding(user.id, normalizedSymbol);
+  const account = await getAccount(user.id);
+  const holding = await getHolding(user.id, normalizedSymbol);
   if (!account || !holding) return NextResponse.json({ message: "보유 종목이 없습니다." }, { status: 400 });
   if (holding.quantity < quantity) return NextResponse.json({ message: "보유 수량을 초과했습니다." }, { status: 400 });
 
@@ -39,17 +39,17 @@ export async function POST(req: Request) {
   const { fee, net } = sellRevenue(price, quantity);
   const remainQty = holding.quantity - quantity;
 
-  if (remainQty <= 0) removeHolding(user.id, normalizedSymbol);
-  else upsertHolding(user.id, normalizedSymbol, remainQty, holding.avgBuyPrice);
+  if (remainQty <= 0) await removeHolding(user.id, normalizedSymbol);
+  else await upsertHolding(user.id, normalizedSymbol, remainQty, holding.avgBuyPrice);
 
-  setCash(user.id, account.cashBalance + net);
-  addTrade({ userId: user.id, symbol: normalizedSymbol, side: "SELL", price, quantity, fee });
+  await setCash(user.id, account.cashBalance + net);
+  await addTrade({ userId: user.id, symbol: normalizedSymbol, side: "SELL", price, quantity, fee });
 
-  const admin = getAdminUser();
+  const admin = await getAdminUser();
   if (admin && admin.id !== user.id) {
-    const adminAccount = getAccount(admin.id);
+    const adminAccount = await getAccount(admin.id);
     if (adminAccount) {
-      setCash(admin.id, adminAccount.cashBalance + fee);
+      await setCash(admin.id, adminAccount.cashBalance + fee);
     }
   }
 

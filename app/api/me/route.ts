@@ -6,7 +6,7 @@ export async function GET() {
   const user = await requireUser();
   if (!user) return NextResponse.json({ user: null }, { status: 200, headers: { "Cache-Control": "no-store" } });
 
-  const account = getAccount(user.id);
+  const account = await getAccount(user.id);
   return NextResponse.json({
     user: { id: user.id, username: user.username, nickname: user.nickname, isAdmin: user.isAdmin ?? false },
     cashBalance: account?.cashBalance ?? 0

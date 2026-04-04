@@ -13,7 +13,7 @@ export async function POST(req: Request) {
   const parsed = schema.safeParse(await req.json());
   if (!parsed.success) return NextResponse.json({ message: "아이디/비밀번호를 입력해주세요." }, { status: 400 });
 
-  const user = findUserByUsername(parsed.data.username);
+  const user = await findUserByUsername(parsed.data.username);
   if (!user) return NextResponse.json({ message: "로그인 실패" }, { status: 401 });
 
   const matched = await bcrypt.compare(parsed.data.password, user.passwordHash);

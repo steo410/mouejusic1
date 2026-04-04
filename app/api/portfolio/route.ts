@@ -7,7 +7,7 @@ export async function GET() {
   const user = await requireUser();
   if (!user) return NextResponse.json({ message: "로그인이 필요합니다." }, { status: 401 });
 
-  const holdings = listHoldings(user.id);
+  const holdings = await listHoldings(user.id);
   const rows = await Promise.all(
     holdings.map(async (h) => {
       try {
@@ -32,7 +32,7 @@ export async function GET() {
     })
   );
 
-  const account = getAccount(user.id);
+  const account = await getAccount(user.id);
   const totalStockValue = rows.reduce((sum, r) => sum + r.evalAmount, 0);
   return NextResponse.json(
     { rows, cashBalance: account?.cashBalance ?? 0, totalAsset: (account?.cashBalance ?? 0) + totalStockValue },

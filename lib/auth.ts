@@ -32,7 +32,7 @@ export async function requireUser() {
   const claims = decodeSessionUser(raw);
   if (!claims) return null;
 
-  const user = findUserById(claims.id);
+  const user = await findUserById(claims.id);
   if (user) return user;
 
   return upsertUserFromClaims(claims);

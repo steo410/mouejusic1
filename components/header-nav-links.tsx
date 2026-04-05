@@ -21,6 +21,7 @@ export function HeaderNavLinks() {
   return (
     <div className="flex gap-4">
       <Link href="/">홈</Link>
+      <Link href="/board">게시판</Link>
       {!me.user && <Link href="/auth">로그인/회원가입</Link>}
       {me.user && <Link href="/mypage">마이페이지</Link>}
       {me.user?.isAdmin && <Link href="/admin">관리자</Link>}

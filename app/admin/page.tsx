@@ -4,6 +4,7 @@ import { getAccount, listHoldings, listTrades, listUsers } from "@/lib/demo-db";
 import { getChart, getQuote } from "@/lib/finance";
 import { AdminGiftForm } from "@/components/admin-gift-form";
 import { AdminDeleteButton } from "@/components/admin-delete-button";
+import { AdminResetPassword } from "@/components/admin-reset-password";
 
 export default async function AdminPage() {
   const me = await requireUser();
@@ -66,12 +67,6 @@ export default async function AdminPage() {
             <section key={user.id} className="rounded border border-slate-800 p-3 text-sm space-y-1">
               <p><span className="text-slate-400">아이디:</span> {user.username}</p>
               <p><span className="text-slate-400">닉네임:</span> {user.nickname}</p>
-              <p>
-                <span className="text-slate-400">비밀번호:</span>{" "}
-                <span className="text-yellow-400 text-xs">
-                  bcrypt 암호화됨 — 분실 시 관리자가 임시 비밀번호로 재설정 필요
-                </span>
-              </p>
               <p><span className="text-slate-400">권한:</span> {user.isAdmin ? "관리자" : "일반회원"}</p>
               <p><span className="text-slate-400">가입일 (KST):</span> {toKST(user.createdAt)}</p>
               <p><span className="text-slate-400">현금 잔고:</span> {Math.round(account?.cashBalance ?? 0).toLocaleString()}원</p>
@@ -80,6 +75,7 @@ export default async function AdminPage() {
               <p><span className="text-slate-400">보유 종목 수:</span> {holdings.length}</p>
               <p><span className="text-slate-400">거래 횟수:</span> {trades.length}</p>
               <AdminGiftForm userId={user.id} />
+              <AdminResetPassword userId={user.id} username={user.username} />
               <AdminDeleteButton userId={user.id} username={user.username} />
             </section>
           );

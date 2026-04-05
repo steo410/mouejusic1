@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { getAccount, listHoldings, listTrades, listUsers } from "@/lib/demo-db";
 import { getChart, getQuote } from "@/lib/finance";
 import { AdminGiftForm } from "@/components/admin-gift-form";
+import { AdminDeleteButton } from "@/components/admin-delete-button";
 
 export default async function AdminPage() {
   const me = await requireUser();
@@ -38,7 +39,7 @@ export default async function AdminPage() {
         account: await getAccount(u.id),
         holdings,
         trades: await listTrades(u.id),
-        stockValue
+        stockValue,
       };
     })
   );
@@ -79,6 +80,7 @@ export default async function AdminPage() {
               <p><span className="text-slate-400">보유 종목 수:</span> {holdings.length}</p>
               <p><span className="text-slate-400">거래 횟수:</span> {trades.length}</p>
               <AdminGiftForm userId={user.id} />
+              <AdminDeleteButton userId={user.id} username={user.username} />
             </section>
           );
         })}

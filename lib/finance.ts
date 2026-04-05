@@ -1,4 +1,5 @@
-const timeoutMs = Number(process.env.YAHOO_FINANCE_TIMEOUT_MS ?? 6000);
+const timeoutMs = Number(process.env.FINNHUB_TIMEOUT_MS ?? 6000);
+const FINNHUB_KEY = process.env.FINNHUB_API_KEY ?? "";
 
 async function fetchJson<T>(url: string): Promise<T> {
   const controller = new AbortController();
@@ -6,86 +7,89 @@ async function fetchJson<T>(url: string): Promise<T> {
   try {
     const res = await fetch(url, {
       signal: controller.signal,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-      next: { revalidate: 0 }
+      headers: { "X-Finnhub-Token": FINNHUB_KEY },
+      next: { revalidate: 0 },
     });
-    if (!res.ok) throw new Error(`Yahoo API failed: ${res.status}`);
+    if (!res.ok) throw new Error(`Finnhub API failed: ${res.status}`);
     return (await res.json()) as T;
   } finally {
     clearTimeout(id);
   }
 }
 
-type SearchResponse = {
-  quotes?: Array<{ symbol?: string; shortname?: string; longname?: string }>;
+// ── searchTicker ──────────────────────────────────────────────
+type FinnhubSearchResult = {
+  result?: Array<{ symbol: string; description: string; type: string }>;
+  count?: number;
 };
 
 export async function searchTicker(query: string) {
-  const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(query)}&quotesCount=8&newsCount=0`;
-  return fetchJson<SearchResponse>(url);
+  const url = `https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}`;
+  const data = await fetchJson<FinnhubSearchResult>(url);
+  return {
+    quotes: (data.result ?? []).map((r) => ({
+      symbol: r.symbol,
+      shortname: r.description,
+      longname: r.description,
+    })),
+  };
 }
 
-type QuoteResponse = {
-  quoteResponse?: {
-    result?: Array<{ symbol?: string; regularMarketPrice?: number }>;
-  };
+// ── getQuote ──────────────────────────────────────────────────
+type FinnhubQuote = {
+  c: number;  // current price
+  h: number;  // high
+  l: number;  // low
+  o: number;  // open
+  pc: number; // previous close
+  t: number;  // timestamp
 };
 
 export async function getQuote(symbol: string) {
-  // query1 실패 시 query2로 재시도
-  const urls = [
-    `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`,
-    `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${encodeURIComponent(symbol)}`,
-  ];
+  const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}`;
+  const data = await fetchJson<FinnhubQuote>(url);
 
-  let lastError: unknown;
-  for (const url of urls) {
-    try {
-      const data = await fetchJson<QuoteResponse>(url);
-      const quote = data.quoteResponse?.result?.[0];
-      if (quote && quote.regularMarketPrice) return quote;
-    } catch (e) {
-      lastError = e;
-    }
-  }
-  throw lastError ?? new Error("quote not found");
+  if (!data.c || data.c === 0) throw new Error(`No price data for ${symbol}`);
+
+  return {
+    symbol,
+    regularMarketPrice: data.c,
+    regularMarketPreviousClose: data.pc,
+    regularMarketOpen: data.o,
+    regularMarketDayHigh: data.h,
+    regularMarketDayLow: data.l,
+  };
 }
 
-type ChartResponse = {
-  chart?: {
-    result?: Array<{
-      timestamp?: number[];
-      indicators?: { quote?: Array<{ close?: Array<number | null> }> };
-    }>;
-  };
+// ── getChart ──────────────────────────────────────────────────
+type FinnhubCandles = {
+  c: number[];  // close prices
+  t: number[];  // timestamps (unix)
+  s: string;    // "ok" | "no_data"
 };
 
 export async function getChart(symbol: string, range: "1d" | "5d" | "1mo") {
-  const interval = range === "1d" ? "5m" : "1d";
-  const urls = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}`,
-  ];
+  const now = Math.floor(Date.now() / 1000);
+  const resolution = range === "1d" ? "5" : "D";
 
-  let lastError: unknown;
-  for (const url of urls) {
-    try {
-      const data = await fetchJson<ChartResponse>(url);
-      const result = data.chart?.result?.[0];
-      if (result) {
-        const ts = result.timestamp ?? [];
-        const closes = result.indicators?.quote?.[0]?.close ?? [];
-        return {
-          quotes: ts.map((t, i) => ({ date: new Date(t * 1000), close: closes[i] ?? 0 }))
-        };
-      }
-    } catch (e) {
-      lastError = e;
-    }
+  const from =
+    range === "1d"
+      ? now - 60 * 60 * 24
+      : range === "5d"
+      ? now - 60 * 60 * 24 * 5
+      : now - 60 * 60 * 24 * 30;
+
+  const url = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=${resolution}&from=${from}&to=${now}`;
+  const data = await fetchJson<FinnhubCandles>(url);
+
+  if (data.s !== "ok" || !data.t?.length) {
+    throw new Error(`No chart data for ${symbol}`);
   }
-  throw lastError ?? new Error("chart not found");
+
+  return {
+    quotes: data.t.map((ts, i) => ({
+      date: new Date(ts * 1000),
+      close: data.c[i] ?? 0,
+    })),
+  };
 }

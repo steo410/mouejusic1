@@ -3,12 +3,12 @@ import { getQuote } from "@/lib/finance";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET() {
   try {
     const db = getSupabaseAdmin();
 
-    // demo-db 거치지 않고 직접 조회
     const { data: allUsers, error: userError } = await db
       .from("users")
       .select("id, nickname, is_admin");
@@ -20,10 +20,7 @@ export async function GET() {
     const users = (allUsers ?? []).filter((u: any) => !u.is_admin);
 
     if (users.length === 0) {
-      return NextResponse.json({
-        ranking: [],
-        debug_total_users: allUsers?.length ?? 0,
-      });
+      return NextResponse.json({ ranking: [] });
     }
 
     const ranking = await Promise.all(
@@ -60,7 +57,10 @@ export async function GET() {
     );
 
     ranking.sort((a, b) => b.totalAsset - a.totalAsset);
-    return NextResponse.json({ ranking }, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json(
+      { ranking },
+      { headers: { "Cache-Control": "no-store, max-age=0" } }
+    );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 500 });

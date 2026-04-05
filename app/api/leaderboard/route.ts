@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   const allUsers = await listUsers();
   const users = allUsers.filter((u) => !u.isAdmin);
-  if (users.length === 0) return NextResponse.json({ nickname: "-", totalAsset: 0 });
+  if (users.length === 0) return NextResponse.json({ ranking: [] });
 
   const ranking = await Promise.all(
     users.map(async (u) => {
@@ -22,13 +22,16 @@ export async function GET() {
           stockValue += 0;
         }
       }
+      const cashBalance = account?.cashBalance ?? 0;
       return {
         nickname: u.nickname,
-        totalAsset: (account?.cashBalance ?? 0) + stockValue
+        cashBalance: Math.round(cashBalance),
+        stockValue: Math.round(stockValue),
+        totalAsset: Math.round(cashBalance + stockValue),
       };
     })
   );
 
   ranking.sort((a, b) => b.totalAsset - a.totalAsset);
-  return NextResponse.json(ranking[0], { headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json({ ranking }, { headers: { "Cache-Control": "no-store" } });
 }

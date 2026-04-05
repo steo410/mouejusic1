@@ -17,7 +17,6 @@ async function fetchJson<T>(url: string): Promise<T> {
   }
 }
 
-// ── searchTicker ──────────────────────────────────────────────
 type FinnhubSearchResult = {
   result?: Array<{ symbol: string; description: string; type: string }>;
   count?: number;
@@ -35,14 +34,13 @@ export async function searchTicker(query: string) {
   };
 }
 
-// ── getQuote ──────────────────────────────────────────────────
 type FinnhubQuote = {
-  c: number;  // current price
-  h: number;  // high
-  l: number;  // low
-  o: number;  // open
-  pc: number; // previous close
-  t: number;  // timestamp
+  c: number;
+  h: number;
+  l: number;
+  o: number;
+  pc: number;
+  t: number;
 };
 
 export async function getQuote(symbol: string) {
@@ -61,11 +59,10 @@ export async function getQuote(symbol: string) {
   };
 }
 
-// ── getChart ──────────────────────────────────────────────────
 type FinnhubCandles = {
-  c: number[];  // close prices
-  t: number[];  // timestamps (unix)
-  s: string;    // "ok" | "no_data"
+  c: number[];
+  t: number[];
+  s: string;
 };
 
 export async function getChart(symbol: string, range: "1d" | "5d" | "1mo") {

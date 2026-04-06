@@ -17,17 +17,41 @@ async function fetchJson<T>(url: string, headers?: Record<string, string>): Prom
   }
 }
 
-// 한국 주식 여부 판별 (.KS, .KQ)
 function isKoreanSymbol(symbol: string) {
   return symbol.endsWith(".KS") || symbol.endsWith(".KQ");
 }
 
-// 종목코드 추출: "005930.KS" → "005930"
 function toKrxCode(symbol: string) {
   return symbol.replace(/\.(KS|KQ)$/, "");
 }
 
-// ── 한국 주식 현재가 (네이버 금융) ────────────────────────────
+// ── 현재 USD→KRW 환율 (네이버 금융) ─────────────────────────
+export async function getUsdToKrw(): Promise<number> {
+  try {
+    const url = "https://m.stock.naver.com/api/forex/FX_USDKRW";
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+          "Referer": "https://m.stock.naver.com/",
+        },
+        next: { revalidate: 60 },
+      });
+      if (!res.ok) throw new Error("forex api failed");
+      const data = await res.json() as { closePrice?: string };
+      const rate = Number(data.closePrice?.replace(/,/g, "") ?? 0);
+      if (rate > 0) return rate;
+    } finally {
+      clearTimeout(id);
+    }
+  } catch {}
+  return 1400; // 네이버 실패 시 기본값
+}
+
+// ── 한국 주식 현재가 (네이버 금융) ───────────────────────────
 async function getKoreanQuote(symbol: string) {
   const code = toKrxCode(symbol);
   const url = `https://m.stock.naver.com/api/stock/${code}/basic`;
@@ -59,6 +83,7 @@ async function getKoreanQuote(symbol: string) {
       regularMarketOpen: Number(data.openPrice?.replace(/,/g, "") ?? 0),
       regularMarketDayHigh: Number(data.highPrice?.replace(/,/g, "") ?? 0),
       regularMarketDayLow: Number(data.lowPrice?.replace(/,/g, "") ?? 0),
+      currency: "KRW" as const,
     };
   } finally {
     clearTimeout(id);
@@ -95,20 +120,80 @@ async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
   }
 }
 
+// ── 한국 주식 검색 (네이버 금융) ─────────────────────────────
+async function searchKoreanTicker(query: string) {
+  try {
+    const url = `https://m.stock.naver.com/api/search/all?query=${encodeURIComponent(query)}&exchange=KOSPI,KOSDAQ`;
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
+          "Referer": "https://m.stock.naver.com/",
+        },
+        next: { revalidate: 0 },
+      });
+      if (!res.ok) return [];
+      const data = await res.json() as {
+        stocks?: Array<{ itemCode?: string; itemName?: string; stockExchangeType?: { code?: string } }>;
+      };
+      return (data.stocks ?? []).slice(0, 10).map((s) => {
+        const exchange = s.stockExchangeType?.code === "KOSDAQ" ? ".KQ" : ".KS";
+        return {
+          symbol: `${s.itemCode}${exchange}`,
+          name: s.itemName ?? s.itemCode ?? "",
+          source: "db" as const,
+        };
+      });
+    } finally {
+      clearTimeout(id);
+    }
+  } catch {
+    return [];
+  }
+}
+
 // ── searchTicker ──────────────────────────────────────────────
 type FinnhubSearchResult = {
   result?: Array<{ symbol: string; description: string; type: string }>;
 };
 
 export async function searchTicker(query: string) {
-  const url = `https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}`;
-  const data = await fetchJson<FinnhubSearchResult>(url, { "X-Finnhub-Token": FINNHUB_KEY });
+  // 한국어 포함 여부로 한국/미국 구분
+  const isKorean = /[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(query);
+
+  if (isKorean) {
+    // 한국어 검색은 네이버 금융만 사용
+    const krx = await searchKoreanTicker(query);
+    return { quotes: krx.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })) };
+  }
+
+  // 영문 검색: 네이버(한국주식) + Finnhub(미국주식) 병렬 조회
+  const [krx, finnhubData] = await Promise.allSettled([
+    searchKoreanTicker(query),
+    fetchJson<FinnhubSearchResult>(
+      `https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}`,
+      { "X-Finnhub-Token": FINNHUB_KEY }
+    ),
+  ]);
+
+  const krxResults = krx.status === "fulfilled" ? krx.value : [];
+  const usaResults =
+    finnhubData.status === "fulfilled"
+      ? (finnhubData.value.result ?? []).slice(0, 10).map((r) => ({
+          symbol: r.symbol,
+          shortname: r.description,
+          longname: r.description,
+        }))
+      : [];
+
   return {
-    quotes: (data.result ?? []).map((r) => ({
-      symbol: r.symbol,
-      shortname: r.description,
-      longname: r.description,
-    })),
+    quotes: [
+      ...krxResults.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })),
+      ...usaResults,
+    ],
   };
 }
 
@@ -123,10 +208,8 @@ type FinnhubQuote = {
 };
 
 export async function getQuote(symbol: string) {
-  // 한국 주식은 네이버 금융으로
   if (isKoreanSymbol(symbol)) return getKoreanQuote(symbol);
 
-  // 미국 주식은 Finnhub
   const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}`;
   const data = await fetchJson<FinnhubQuote>(url, { "X-Finnhub-Token": FINNHUB_KEY });
   if (!data.c || data.c === 0) throw new Error(`No price data for ${symbol}`);
@@ -137,6 +220,7 @@ export async function getQuote(symbol: string) {
     regularMarketOpen: data.o,
     regularMarketDayHigh: data.h,
     regularMarketDayLow: data.l,
+    currency: "USD" as const,
   };
 }
 
@@ -148,10 +232,8 @@ type FinnhubCandles = {
 };
 
 export async function getChart(symbol: string, range: "1d" | "5d" | "1mo") {
-  // 한국 주식은 네이버 금융으로
   if (isKoreanSymbol(symbol)) return getKoreanChart(symbol, range);
 
-  // 미국 주식은 Finnhub
   const now = Math.floor(Date.now() / 1000);
   const resolution = range === "1d" ? "5" : "D";
   const from =

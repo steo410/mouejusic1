@@ -78,132 +78,132 @@ async function getKoreanQuote(symbol: string) {
   };
 }
 
-// ── 한국 주식 차트 (네이버 여러 엔드포인트 시도) ──────────────
+// ── 날짜 문자열 파싱 헬퍼 ─────────────────────────────────────
+// localDate: "20250401", localTime: "093000" → Date 객체
+function parseNaverDate(dateStr: string, timeStr = "150000"): Date {
+  const d = String(dateStr).replace(/\D/g, ""); // 숫자만
+  const t = String(timeStr).replace(/\D/g, "").padEnd(6, "0");
+  if (d.length < 8) return new Date(NaN);
+  const ymd = `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}`;
+  const hms = `${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}`;
+  return new Date(`${ymd}T${hms}+09:00`);
+}
+
+// ── 한국 주식 차트 (네이버 API) ───────────────────────────────
 async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
   const code = toKrxCode(symbol);
 
-  // 엔드포인트 목록 — 순서대로 시도
-  const endpointSets: Array<{ urls: string[]; headers: Record<string, string>; isXml?: boolean }> = [
-    // 1) 네이버 모바일 캔들 API (분봉/일봉)
-    {
-      urls: range === "1d"
-        ? [`https://m.stock.naver.com/api/stock/${code}/candle/minute?count=78&interval=5`]
-        : range === "5d"
-        ? [`https://m.stock.naver.com/api/stock/${code}/candle/day?count=5`]
-        : [`https://m.stock.naver.com/api/stock/${code}/candle/day?count=30`],
-      headers: {
-        "Referer": "https://m.stock.naver.com/",
-        "Origin": "https://m.stock.naver.com",
-      },
-    },
-    // 2) 네이버 증권 신규 차트 API
-    {
-      urls: range === "1d"
-        ? [`https://api.stock.naver.com/chart/domestic/item/${code}/minute?count=78&interval=5`]
-        : range === "5d"
-        ? [`https://api.stock.naver.com/chart/domestic/item/${code}/day?count=5`]
-        : [`https://api.stock.naver.com/chart/domestic/item/${code}/day?count=30`],
-      headers: {
-        "Referer": "https://finance.naver.com/",
-        "Origin": "https://finance.naver.com",
-      },
-    },
-    // 3) 네이버 증권 PC XML API (fchart)
-    {
-      urls: range === "1d"
-        ? [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=minute&count=78&requestType=0`]
-        : range === "5d"
-        ? [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=5&requestType=0`]
-        : [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=30&requestType=0`],
-      headers: { "Referer": "https://finance.naver.com/" },
-      isXml: true,
-    },
-  ];
+  // ── 시도할 엔드포인트 정의 ──────────────────────────────────
+  //
+  // 네이버 모바일 API 실제 응답 구조:
+  //   분봉: { candles: [ { localDate:"20250401", localTime:"093000",
+  //                        openPrice:"74000", closePrice:"74500", ... } ] }
+  //   일봉: [ { localDate:"20250401", openPrice:"74000", closePrice:"74500", ... } ]
+  //         (최신→과거 내림차순)
+  //
+  // fchart XML 구조:
+  //   <item date="202504011030" open="74000" high="74800" low="73900" close="74500" />
+  //   일봉: date 8자리, 분봉: date 12자리
 
-  for (const { urls, headers, isXml } of endpointSets) {
+  type Endpoint = {
+    url: string;
+    headers: Record<string, string>;
+    type: "minute_obj" | "day_arr" | "xml";
+  };
+
+  const mobileHeaders = {
+    "Referer": "https://m.stock.naver.com/",
+    "Origin": "https://m.stock.naver.com",
+  };
+  const fchartHeaders = { "Referer": "https://finance.naver.com/" };
+
+  const endpoints: Endpoint[] = range === "1d"
+    ? [
+        { url: `https://m.stock.naver.com/api/stock/${code}/candle/minute?count=80&interval=5`, headers: mobileHeaders, type: "minute_obj" },
+        { url: `https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=minute&count=80&requestType=0`, headers: fchartHeaders, type: "xml" },
+      ]
+    : range === "5d"
+    ? [
+        { url: `https://m.stock.naver.com/api/stock/${code}/candle/day?count=7`, headers: mobileHeaders, type: "day_arr" },
+        { url: `https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=7&requestType=0`, headers: fchartHeaders, type: "xml" },
+      ]
+    : [
+        { url: `https://m.stock.naver.com/api/stock/${code}/candle/day?count=33`, headers: mobileHeaders, type: "day_arr" },
+        { url: `https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=33&requestType=0`, headers: fchartHeaders, type: "xml" },
+      ];
+
+  for (const ep of endpoints) {
     try {
-      const data = await fetchWithRetry<unknown>(urls, headers);
+      const raw = await fetchWithRetry<unknown>([ep.url], ep.headers);
 
-      if (isXml || typeof data === "string") {
-        // XML 형태 응답 처리 (fchart.stock.naver.com)
-        const str = String(data);
+      // ── XML 처리 ────────────────────────────────────────────
+      if (ep.type === "xml" || typeof raw === "string") {
+        const str = String(raw);
         const matches = [
           ...str.matchAll(/item date="(\d+)" open="\d+" high="\d+" low="\d+" close="(\d+)"/g),
         ];
-        if (matches.length >= 1) {
-          const quotes = matches.map((m) => {
-            const ds = m[1]; // "20240405" or "202404051030"
-            const ymd = `${ds.slice(0, 4)}-${ds.slice(4, 6)}-${ds.slice(6, 8)}`;
-            const hhmm = ds.length >= 12
-              ? `${ds.slice(8, 10)}:${ds.slice(10, 12)}`
-              : "15:30";
-            return { date: new Date(`${ymd}T${hhmm}:00+09:00`), close: Number(m[2]) };
-          }).filter((q) => q.close > 0);
-          if (quotes.length >= 1) return { quotes };
+        if (matches.length >= 2) {
+          const quotes = matches.map((m) => ({
+            date: parseNaverDate(
+              m[1].slice(0, 8),
+              m[1].length >= 12 ? m[1].slice(8, 14) : "150000"
+            ),
+            close: Number(m[2]),
+          })).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
+          if (quotes.length >= 2) return { quotes };
         }
         continue;
       }
 
-      // 배열 형태 JSON 응답 처리
-      if (Array.isArray(data) && data.length >= 1) {
-        const quotes = data.map((d: Record<string, unknown>) => {
-          // 네이버 모바일 API 필드명: candleDate, candleTime, closePrice
-          const dateStr = String(
-            d.candleDate ?? d.localDate ?? d.date ?? d.stck_bsop_date ?? ""
-          );
-          const timeStr = String(
-            d.candleTime ?? d.localTime ?? d.time ?? d.stck_cntg_hour ?? "153000"
-          );
-          const ymd = dateStr.length === 8
-            ? `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`
-            : dateStr.length >= 10
-            ? dateStr.slice(0, 10)
-            : new Date().toISOString().slice(0, 10);
-          // timeStr이 "HHmmss" 또는 "HHmm" 형태 모두 처리
-          const hh = timeStr.slice(0, 2);
-          const mm = timeStr.slice(2, 4);
-          const hhmm = `${hh}:${mm}`;
-          const close = Number(
-            String(d.closePrice ?? d.close ?? d.ncv ?? d.stck_prpr ?? 0).replace(/,/g, "")
-          );
-          return { date: new Date(`${ymd}T${hhmm}:00+09:00`), close };
-        }).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
-
-        if (quotes.length >= 1) return { quotes };
+      // ── 분봉: { candles: [...] } 객체 구조 ──────────────────
+      if (ep.type === "minute_obj") {
+        const obj = raw as Record<string, unknown>;
+        const arr: unknown[] = Array.isArray(raw)
+          ? raw
+          : Array.isArray(obj.candles) ? obj.candles as unknown[] : [];
+        if (arr.length >= 2) {
+          const quotes = (arr as Record<string, unknown>[]).map((d) => ({
+            date: parseNaverDate(
+              String(d.localDate ?? d.candleDate ?? d.date ?? ""),
+              String(d.localTime ?? d.candleTime ?? d.time ?? "093000")
+            ),
+            close: Number(String(d.closePrice ?? d.close ?? 0).replace(/,/g, "")),
+          })).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
+          // 분봉은 오래된 순으로 정렬
+          quotes.sort((a, b) => a.date.getTime() - b.date.getTime());
+          if (quotes.length >= 2) return { quotes };
+        }
+        continue;
       }
 
-      // 객체 형태 JSON 응답 처리 (일부 API는 { candles: [...] } 구조)
-      if (data && typeof data === "object" && !Array.isArray(data)) {
-        const obj = data as Record<string, unknown>;
-        const arr = (obj.candles ?? obj.items ?? obj.datas ?? obj.chartinfos) as unknown[];
-        if (Array.isArray(arr) && arr.length >= 1) {
-          const quotes = (arr as Record<string, unknown>[]).map((d) => {
-            const dateStr = String(d.candleDate ?? d.date ?? d.localDate ?? "");
-            const timeStr = String(d.candleTime ?? d.time ?? d.localTime ?? "153000");
-            const ymd = dateStr.length === 8
-              ? `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`
-              : dateStr.length >= 10 ? dateStr.slice(0, 10) : new Date().toISOString().slice(0, 10);
-            const hh = timeStr.slice(0, 2);
-            const mm = timeStr.slice(2, 4);
-            const close = Number(
-              String(d.closePrice ?? d.close ?? 0).replace(/,/g, "")
-            );
-            return { date: new Date(`${ymd}T${hh}:${mm}:00+09:00`), close };
-          }).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
-          if (quotes.length >= 1) return { quotes };
+      // ── 일봉: [...] 배열 구조 ────────────────────────────────
+      if (ep.type === "day_arr") {
+        const arr: unknown[] = Array.isArray(raw)
+          ? raw
+          : Array.isArray((raw as Record<string, unknown>).candles)
+          ? (raw as Record<string, unknown>).candles as unknown[]
+          : [];
+        if (arr.length >= 2) {
+          const quotes = (arr as Record<string, unknown>[]).map((d) => ({
+            date: parseNaverDate(String(d.localDate ?? d.candleDate ?? d.date ?? "")),
+            close: Number(String(d.closePrice ?? d.close ?? 0).replace(/,/g, "")),
+          })).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
+          // 일봉은 내림차순(최신→과거)으로 오므로 오름차순 정렬
+          quotes.sort((a, b) => a.date.getTime() - b.date.getTime());
+          if (quotes.length >= 2) return { quotes };
         }
+        continue;
       }
     } catch {
       continue;
     }
   }
 
-  // 최후 fallback: 현재가를 기반으로 단일 포인트 생성
+  // ── 최후 fallback: 현재가 2포인트 ───────────────────────────
   try {
     const quote = await getKoreanQuote(symbol);
     const now = new Date();
-    // 최소한 2포인트 생성 (차트 표시를 위해)
-    const prev = new Date(now.getTime() - 60 * 1000);
+    const prev = new Date(now.getTime() - 60_000);
     return {
       quotes: [
         { date: prev, close: quote.regularMarketPreviousClose || quote.regularMarketPrice },

@@ -45,7 +45,7 @@ export async function getUsdToKrw(): Promise<number> {
     const data = await fetchWithRetry<{ closePrice?: string }>(
       ["https://m.stock.naver.com/api/forex/FX_USDKRW"],
       { "Referer": "https://m.stock.naver.com/" }
-    );
+     );
     const rate = Number(data.closePrice?.replace(/,/g, "") ?? 0);
     if (rate > 0) return rate;
   } catch {}
@@ -64,7 +64,7 @@ async function getKoreanQuote(symbol: string) {
   }>(
     [`https://m.stock.naver.com/api/stock/${code}/basic`],
     { "Referer": "https://m.stock.naver.com/" }
-  );
+   );
   const price = Number(data.closePrice?.replace(/,/g, "") ?? 0);
   if (!price) throw new Error(`No price for ${symbol}`);
   return {
@@ -89,114 +89,66 @@ function parseNaverDate(dateStr: string, timeStr = "150000"): Date {
   return new Date(`${ymd}T${hms}+09:00`);
 }
 
-// ── 한국 주식 차트 (네이버 API) ───────────────────────────────
+// ── fchart XML 파싱 헬퍼 ──────────────────────────────────────
+// 네이버 fchart XML 응답 형식:
+//   일봉: <item data="20260401|open|high|low|close|volume" />
+//   분봉: <item data="202604011030|open|high|low|close|volume" />
+//   (open/high/low 는 null 일 수 있음)
+function parseFchartXml(
+  xmlStr: string,
+  isMinute: boolean
+): { date: Date; close: number }[] {
+  const matches = [...xmlStr.matchAll(/item data="([^"]+)"/g)];
+  const quotes = matches
+    .map((m) => {
+      const parts = m[1].split("|");
+      // parts[0] = 날짜(8자리) 또는 날짜+시간(12자리)
+      // parts[4] = close 가격
+      const datePart = parts[0] ?? "";
+      const closePart = parts[4] ?? "";
+      if (!datePart || closePart === "null" || closePart === "") return null;
+      const closeVal = Number(closePart);
+      if (!closeVal || closeVal <= 0) return null;
+
+      let date: Date;
+      if (isMinute && datePart.length >= 12) {
+        // 분봉: 202604011030 → 날짜 8자리 + 시간 4자리(HHMM)
+        date = parseNaverDate(datePart.slice(0, 8), datePart.slice(8, 12) + "00");
+      } else {
+        // 일봉: 20260401
+        date = parseNaverDate(datePart.slice(0, 8));
+      }
+      if (isNaN(date.getTime())) return null;
+      return { date, close: closeVal };
+    })
+    .filter((q): q is { date: Date; close: number } => q !== null);
+
+  // 오래된 순으로 정렬
+  quotes.sort((a, b) => a.date.getTime() - b.date.getTime());
+  return quotes;
+}
+
+// ── 한국 주식 차트 (네이버 fchart XML) ───────────────────────
 async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
   const code = toKrxCode(symbol);
-
-  // ── 시도할 엔드포인트 정의 ──────────────────────────────────
-  //
-  // 네이버 모바일 API 실제 응답 구조:
-  //   분봉: { candles: [ { localDate:"20250401", localTime:"093000",
-  //                        openPrice:"74000", closePrice:"74500", ... } ] }
-  //   일봉: [ { localDate:"20250401", openPrice:"74000", closePrice:"74500", ... } ]
-  //         (최신→과거 내림차순)
-  //
-  // fchart XML 구조:
-  //   <item date="202504011030" open="74000" high="74800" low="73900" close="74500" />
-  //   일봉: date 8자리, 분봉: date 12자리
-
-  type Endpoint = {
-    url: string;
-    headers: Record<string, string>;
-    type: "minute_obj" | "day_arr" | "xml";
-  };
-
-  const mobileHeaders = {
-    "Referer": "https://m.stock.naver.com/",
-    "Origin": "https://m.stock.naver.com",
-  };
   const fchartHeaders = { "Referer": "https://finance.naver.com/" };
 
-  const endpoints: Endpoint[] = range === "1d"
-    ? [
-        { url: `https://m.stock.naver.com/api/stock/${code}/candle/minute?count=80&interval=5`, headers: mobileHeaders, type: "minute_obj" },
-        { url: `https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=minute&count=80&requestType=0`, headers: fchartHeaders, type: "xml" },
-      ]
-    : range === "5d"
-    ? [
-        { url: `https://m.stock.naver.com/api/stock/${code}/candle/day?count=7`, headers: mobileHeaders, type: "day_arr" },
-        { url: `https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=7&requestType=0`, headers: fchartHeaders, type: "xml" },
-      ]
-    : [
-        { url: `https://m.stock.naver.com/api/stock/${code}/candle/day?count=33`, headers: mobileHeaders, type: "day_arr" },
-        { url: `https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=33&requestType=0`, headers: fchartHeaders, type: "xml" },
-      ];
+  // 분봉(1d ): count=80, 일봉(5d/1mo): count=7 or 33
+  const isMinute = range === "1d";
+  const countMap = { "1d": 80, "5d": 7, "1mo": 33 } as const;
+  const count = countMap[range];
+  const timeframe = isMinute ? "minute" : "day";
 
-  for (const ep of endpoints) {
-    try {
-      const raw = await fetchWithRetry<unknown>([ep.url], ep.headers);
+  const url = `https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=${timeframe}&count=${count}&requestType=0`;
 
-      // ── XML 처리 ────────────────────────────────────────────
-      if (ep.type === "xml" || typeof raw === "string") {
-        const str = String(raw);
-        const matches = [
-          ...str.matchAll(/item date="(\d+)" open="\d+" high="\d+" low="\d+" close="(\d+)"/g),
-        ];
-        if (matches.length >= 2) {
-          const quotes = matches.map((m) => ({
-            date: parseNaverDate(
-              m[1].slice(0, 8),
-              m[1].length >= 12 ? m[1].slice(8, 14) : "150000"
-            ),
-            close: Number(m[2]),
-          })).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
-          if (quotes.length >= 2) return { quotes };
-        }
-        continue;
-      }
+  try {
+    const raw = await fetchWithRetry<unknown>([url], fchartHeaders );
+    const xmlStr = String(raw);
 
-      // ── 분봉: { candles: [...] } 객체 구조 ──────────────────
-      if (ep.type === "minute_obj") {
-        const obj = raw as Record<string, unknown>;
-        const arr: unknown[] = Array.isArray(raw)
-          ? raw
-          : Array.isArray(obj.candles) ? obj.candles as unknown[] : [];
-        if (arr.length >= 2) {
-          const quotes = (arr as Record<string, unknown>[]).map((d) => ({
-            date: parseNaverDate(
-              String(d.localDate ?? d.candleDate ?? d.date ?? ""),
-              String(d.localTime ?? d.candleTime ?? d.time ?? "093000")
-            ),
-            close: Number(String(d.closePrice ?? d.close ?? 0).replace(/,/g, "")),
-          })).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
-          // 분봉은 오래된 순으로 정렬
-          quotes.sort((a, b) => a.date.getTime() - b.date.getTime());
-          if (quotes.length >= 2) return { quotes };
-        }
-        continue;
-      }
-
-      // ── 일봉: [...] 배열 구조 ────────────────────────────────
-      if (ep.type === "day_arr") {
-        const arr: unknown[] = Array.isArray(raw)
-          ? raw
-          : Array.isArray((raw as Record<string, unknown>).candles)
-          ? (raw as Record<string, unknown>).candles as unknown[]
-          : [];
-        if (arr.length >= 2) {
-          const quotes = (arr as Record<string, unknown>[]).map((d) => ({
-            date: parseNaverDate(String(d.localDate ?? d.candleDate ?? d.date ?? "")),
-            close: Number(String(d.closePrice ?? d.close ?? 0).replace(/,/g, "")),
-          })).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
-          // 일봉은 내림차순(최신→과거)으로 오므로 오름차순 정렬
-          quotes.sort((a, b) => a.date.getTime() - b.date.getTime());
-          if (quotes.length >= 2) return { quotes };
-        }
-        continue;
-      }
-    } catch {
-      continue;
-    }
+    const quotes = parseFchartXml(xmlStr, isMinute);
+    if (quotes.length >= 2) return { quotes };
+  } catch {
+    // fall through to fallback
   }
 
   // ── 최후 fallback: 현재가 2포인트 ───────────────────────────
@@ -218,8 +170,8 @@ async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
 // ── 미국 주식 현재가 ──────────────────────────────────────────
 async function getUsQuote(symbol: string) {
   const urls = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`,
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol )}?range=1d&interval=1d`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol )}?range=1d&interval=1d`,
   ];
   const data = await fetchWithRetry<{
     chart?: { result?: Array<{ meta?: { regularMarketPrice?: number } }> };
@@ -243,8 +195,8 @@ async function getUsChart(symbol: string, range: "1d" | "5d" | "1mo") {
   const interval = intervalMap[range];
 
   const urls = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=false`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=false`,
+    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol )}?range=${range}&interval=${interval}&includePrePost=false`,
+    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol )}?range=${range}&interval=${interval}&includePrePost=false`,
   ];
 
   const data = await fetchWithRetry<{
@@ -283,9 +235,9 @@ async function searchNaverTicker(query: string) {
         nationCode?: string;
       }>;
     }>(
-      [`https://ac.stock.naver.com/ac?q=${encodeURIComponent(query)}&target=stock,index,marketindicator`],
+      [`https://ac.stock.naver.com/ac?q=${encodeURIComponent(query )}&target=stock,index,marketindicator`],
       { "Referer": "https://finance.naver.com/" }
-    );
+     );
     return (data.items ?? []).slice(0, 10).map((s) => {
       const isKor = s.nationCode === "KOR";
       const exchange = s.typeCode === "KOSDAQ" ? ".KQ" : ".KS";
@@ -311,7 +263,7 @@ export async function searchTicker(query: string) {
     const FINNHUB_KEY = process.env.FINNHUB_API_KEY ?? "";
     const data = await fetchWithRetry<{
       result?: Array<{ symbol: string; description: string }>;
-    }>([`https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}&token=${FINNHUB_KEY}`]);
+    }>([`https://finnhub.io/api/v1/search?q=${encodeURIComponent(query )}&token=${FINNHUB_KEY}`]);
 
     const finnhubItems = (data.result ?? []).slice(0, 10).map((r) => ({
       symbol: r.symbol,

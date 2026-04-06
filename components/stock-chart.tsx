@@ -24,22 +24,26 @@ async function fetchYahooChart(symbol: string, range: "1d" | "5d" | "1mo") {
   const { interval, range: r } = RANGE_CONFIG[range];
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${r}&interval=${interval}&includePrePost=false`;
   const res = await fetch(url, { headers: { "Accept": "application/json" } });
-  if (!res.ok) throw new Error(`Yahoo ${res.status}`);
+  if (!res.ok) throw new Error(`Yahoo HTTP ${res.status}`);
   const data = await res.json();
   const result = data?.chart?.result?.[0];
-  if (!result) throw new Error("no result");
+  if (!result) {
+    const errMsg = data?.chart?.error?.description ?? "no result";
+    throw new Error(errMsg);
+  }
   const timestamps: number[] = result.timestamp ?? [];
   const closes: (number | null)[] = result.indicators?.quote?.[0]?.close ?? [];
-  return timestamps
+  const points = timestamps
     .map((ts, i) => ({ ts: new Date(ts * 1000).toISOString(), c: closes[i] ?? 0 }))
     .filter((p) => p.c > 0);
+  return { points, raw: { timestampCount: timestamps.length, closeCount: closes.length, pointCount: points.length } };
 }
 
 async function fetchNaverChart(symbol: string, range: "1d" | "5d" | "1mo") {
   const res = await fetch(`/api/stock/chart?symbol=${encodeURIComponent(symbol)}&range=${range}`);
   const data = await res.json();
   if (!res.ok) throw new Error(data.message ?? "네이버 차트 오류");
-  return (data.points ?? []) as { ts: string; c: number }[];
+  return { points: (data.points ?? []) as { ts: string; c: number }[], raw: { count: data.count } };
 }
 
 function isKorean(symbol: string) {
@@ -49,6 +53,7 @@ function isKorean(symbol: string) {
 export function StockChart({ symbol }: { symbol: string }) {
   const [range, setRange] = useState<"1d" | "5d" | "1mo">("1d");
   const [points, setPoints] = useState<{ ts: string; c: number }[]>([]);
+  const [debug, setDebug] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -57,11 +62,15 @@ export function StockChart({ symbol }: { symbol: string }) {
     async function load() {
       setLoading(true);
       setError(null);
+      setDebug("");
       try {
-        const data = isKorean(symbol)
+        const result = isKorean(symbol)
           ? await fetchNaverChart(symbol, range)
           : await fetchYahooChart(symbol, range);
-        if (!cancelled) setPoints(data);
+        if (!cancelled) {
+          setPoints(result.points);
+          setDebug(JSON.stringify(result.raw));
+        }
       } catch (e) {
         if (!cancelled) setError((e as Error).message);
       } finally {
@@ -69,8 +78,7 @@ export function StockChart({ symbol }: { symbol: string }) {
       }
     }
     load();
-    const timer = setInterval(load, 30000);
-    return () => { cancelled = true; clearInterval(timer); };
+    return () => { cancelled = true; };
   }, [symbol, range]);
 
   const labels = points.map((p) => {
@@ -108,16 +116,14 @@ export function StockChart({ symbol }: { symbol: string }) {
     },
   };
 
-  const currentPrice = last;
-
   return (
     <section className="rounded-lg border border-slate-800 p-4 space-y-3">
       <p className="text-sm text-slate-300">
         현재가:{" "}
-        {currentPrice > 0
+        {last > 0
           ? isKorean(symbol)
-            ? `${Math.round(currentPrice).toLocaleString()}원`
-            : `$${currentPrice.toFixed(2)}`
+            ? `${Math.round(last).toLocaleString()}원`
+            : `$${last.toFixed(2)}`
           : "조회 중..."}
       </p>
       <div className="flex gap-2">
@@ -134,10 +140,11 @@ export function StockChart({ symbol }: { symbol: string }) {
         ))}
       </div>
       {loading && <p className="text-sm text-slate-400">불러오는 중...</p>}
-      {error && <p className="text-sm text-red-400">차트 오류: {error}</p>}
+      {error && <p className="text-sm text-red-400">오류: {error}</p>}
+      {debug && <p className="text-xs text-slate-500">debug: {debug}</p>}
       {!loading && !error && points.length > 1 && <Line data={chartData} options={options} />}
       {!loading && !error && points.length <= 1 && (
-        <p className="text-sm text-slate-400">차트 데이터가 부족합니다.</p>
+        <p className="text-sm text-slate-400">차트 데이터 부족 ({points.length}개)</p>
       )}
     </section>
   );

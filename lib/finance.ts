@@ -145,25 +145,17 @@ async function searchNaverTicker(query: string) {
           nationCode?: string;
         }>;
       };
-
       return (data.items ?? []).slice(0, 10).map((s) => {
         let symbol = "";
         if (s.nationCode === "KOR") {
-          // 한국 주식: KOSDAQ → .KQ, 나머지(KOSPI 등) → .KS
           const exchange = s.typeCode === "KOSDAQ" ? ".KQ" : ".KS";
           symbol = `${s.code}${exchange}`;
         } else {
-          // 해외 주식: reutersCode에서 로이터 전용 suffix만 제거
-          // .O(나스닥), .N(NYSE), .A(AMEX), .OQ 만 제거
-          // .HK, .T, .SS 등 거래소 코드는 유지
+          // 미국 주식 로이터 suffix만 제거 (.O .OQ .N .A)
           const raw = s.reutersCode ?? s.code ?? "";
           symbol = raw.replace(/\.(O|OQ|N|A)$/, "");
         }
-        return {
-          symbol,
-          name: s.name ?? s.code ?? "",
-          source: "naver" as const,
-        };
+        return { symbol, name: s.name ?? s.code ?? "" };
       }).filter((s) => s.symbol);
     } finally {
       clearTimeout(id);
@@ -179,31 +171,41 @@ type FinnhubSearchResult = {
 };
 
 export async function searchTicker(query: string) {
-  // 네이버 + Finnhub 병렬 검색
-  const [naverResults, finnhubData] = await Promise.allSettled([
-    searchNaverTicker(query),
+  const isKorean = /[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(query);
+
+  if (isKorean) {
+    // 한국어 검색 → 네이버만 사용
+    const naver = await searchNaverTicker(query);
+    return { quotes: naver.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })) };
+  }
+
+  // 영문 검색 → Finnhub 우선 (삼성전자 등 정확히 반환), 네이버로 보완
+  const [finnhubData, naverResults] = await Promise.allSettled([
     fetchJson<FinnhubSearchResult>(
       `https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}`,
       { "X-Finnhub-Token": FINNHUB_KEY }
     ),
+    searchNaverTicker(query),
   ]);
 
-  const naver = naverResults.status === "fulfilled" ? naverResults.value : [];
-
-  // Finnhub 결과에서 미국 주식만 필터 (한국 .KS/.KQ 중복 방지)
   const finnhubItems =
     finnhubData.status === "fulfilled"
-      ? (finnhubData.value.result ?? [])
-          .filter((r) => !r.symbol.includes(".") || r.symbol.endsWith(".KS") || r.symbol.endsWith(".KQ"))
-          .slice(0, 8)
-          .map((r) => ({ symbol: r.symbol, shortname: r.description, longname: r.description }))
+      ? (finnhubData.value.result ?? []).slice(0, 10).map((r) => ({
+          symbol: r.symbol,
+          shortname: r.description,
+          longname: r.description,
+        }))
       : [];
 
-  // 네이버 결과 우선, Finnhub으로 보완
-  const naverSymbols = new Set(naver.map((r) => r.symbol));
+  const naverItems = naverResults.status === "fulfilled" ? naverResults.value : [];
+  const finnhubSymbols = new Set(finnhubItems.map((r) => r.symbol));
+
+  // Finnhub 결과 우선 + 네이버에만 있는 것 보완
   const merged = [
-    ...naver.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })),
-    ...finnhubItems.filter((r) => !naverSymbols.has(r.symbol)),
+    ...finnhubItems,
+    ...naverItems
+      .filter((r) => !finnhubSymbols.has(r.symbol))
+      .map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })),
   ];
 
   return { quotes: merged };

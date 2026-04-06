@@ -13,7 +13,7 @@ async function fetchJson<T>(url: string, headers?: Record<string, string>): Prom
       },
       next: { revalidate: 0 },
     });
-    if (!res.ok) throw new Error(`API failed: ${res.status} ${url}`);
+    if (!res.ok) throw new Error(`API failed: ${res.status}`);
     return (await res.json()) as T;
   } finally {
     clearTimeout(id);
@@ -31,10 +31,10 @@ function toKrxCode(symbol: string) {
 // ── USD→KRW 환율 ──────────────────────────────────────────────
 export async function getUsdToKrw(): Promise<number> {
   try {
-    const url = "https://m.stock.naver.com/api/forex/FX_USDKRW";
-    const data = await fetchJson<{ closePrice?: string }>(url, {
-      "Referer": "https://m.stock.naver.com/",
-    });
+    const data = await fetchJson<{ closePrice?: string }>(
+      "https://m.stock.naver.com/api/forex/FX_USDKRW",
+      { "Referer": "https://m.stock.naver.com/" }
+    );
     const rate = Number(data.closePrice?.replace(/,/g, "") ?? 0);
     if (rate > 0) return rate;
   } catch {}
@@ -44,15 +44,16 @@ export async function getUsdToKrw(): Promise<number> {
 // ── 한국 주식 현재가 (네이버) ─────────────────────────────────
 async function getKoreanQuote(symbol: string) {
   const code = toKrxCode(symbol);
-  const url = `https://m.stock.naver.com/api/stock/${code}/basic`;
   const data = await fetchJson<{
     closePrice?: string;
     compareToPreviousClosePrice?: string;
     openPrice?: string;
     highPrice?: string;
     lowPrice?: string;
-  }>(url, { "Referer": "https://m.stock.naver.com/" });
-
+  }>(
+    `https://m.stock.naver.com/api/stock/${code}/basic`,
+    { "Referer": "https://m.stock.naver.com/" }
+  );
   const currentPrice = Number(data.closePrice?.replace(/,/g, "") ?? 0);
   if (!currentPrice) throw new Error(`No price for ${symbol}`);
   return {
@@ -69,36 +70,65 @@ async function getKoreanQuote(symbol: string) {
 // ── 한국 주식 차트 (네이버) ───────────────────────────────────
 async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
   const code = toKrxCode(symbol);
-
-  // 1d → 분봉(1분), 5d → 일봉 5개, 1mo → 일봉 30개
-  const typeMap = { "1d": "minute", "5d": "day", "1mo": "day" } as const;
-  const countMap = { "1d": 80, "5d": 5, "1mo": 30 } as const;
-  const intervalMap = { "1d": "1", "5d": "1", "1mo": "1" } as const;
-
-  const timeframe = typeMap[range];
+  const countMap = { "1d": 80, "5d": 5, "1mo": 30 };
+  const timeframeMap = { "1d": "minute", "5d": "day", "1mo": "day" };
   const count = countMap[range];
-
-  // 네이버 금융 차트 API (올바른 URL)
-  const url = `https://api.stock.naver.com/chart/domestic/item/${code}/${timeframe}?startDateTime=&endDateTime=&count=${count}&interval=${intervalMap[range]}`;
+  const timeframe = timeframeMap[range];
 
   try {
-    const data = await fetchJson<Array<{ localDate?: string; localTime?: string; closePrice?: string | number }>>(url, {
+    const url = `https://api.stock.naver.com/chart/domestic/item/${code}/${timeframe}?count=${count}&interval=1`;
+    const data = await fetchJson<Array<Record<string, unknown>>>(url, {
       "Referer": "https://finance.naver.com/",
       "Origin": "https://finance.naver.com",
     });
 
     if (Array.isArray(data) && data.length > 0) {
+      const quotes = data.map((d) => {
+        const dateStr = String(d.localDate ?? d.date ?? "");
+        const timeStr = String(d.localTime ?? d.time ?? "0000");
+        // localDate: "20240405" → "2024-04-05"
+        const ymd = dateStr.length === 8
+          ? `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`
+          : dateStr;
+        // localTime: "0930" 또는 "093000" → "09:30"
+        const hhmm = timeStr.length >= 4
+          ? `${timeStr.slice(0, 2)}:${timeStr.slice(2, 4)}`
+          : "09:00";
+        const close = Number(String(d.closePrice ?? d.close ?? "0").replace(/,/g, ""));
+        return { date: new Date(`${ymd}T${hhmm}:00+09:00`), close };
+      }).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
+
+      if (quotes.length > 0) return { quotes };
+    }
+  } catch {}
+
+  // fallback: 현재가 단일 포인트
+  const quote = await getKoreanQuote(symbol);
+  return { quotes: [{ date: new Date(), close: quote.regularMarketPrice }] };
+}
+
+// ── 미국 주식 차트 (Finnhub 무료 → daily candle) ─────────────
+async function getUsChart(symbol: string, range: "1d" | "5d" | "1mo") {
+  // 무료 플랜: /stock/candle 분봉 불가 → daily만 가능
+  const now = Math.floor(Date.now() / 1000);
+  const days = range === "1d" ? 7 : range === "5d" ? 14 : 40;
+  const from = now - 60 * 60 * 24 * days;
+
+  const url = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=D&from=${from}&to=${now}&token=${FINNHUB_KEY}`;
+  try {
+    const data = await fetchJson<{ c: number[]; t: number[]; s: string }>(url);
+    if (data.s === "ok" && data.t?.length) {
       return {
-        quotes: data.map((d) => ({
-          date: new Date(`${String(d.localDate ?? "").replace(/(\d{4})(\d{2})(\d{2})/, "$1-$2-$3")}T${String(d.localTime ?? "09:00").replace(/(\d{2})(\d{2})(\d{2})/, "$1:$2:$3")}`),
-          close: Number(String(d.closePrice ?? "0").replace(/,/g, "")),
+        quotes: data.t.map((ts, i) => ({
+          date: new Date(ts * 1000),
+          close: data.c[i] ?? 0,
         })),
       };
     }
   } catch {}
 
   // fallback: 현재가 단일 포인트
-  const quote = await getKoreanQuote(symbol);
+  const quote = await getQuote(symbol);
   return { quotes: [{ date: new Date(), close: quote.regularMarketPrice }] };
 }
 
@@ -133,10 +163,6 @@ async function searchNaverTicker(query: string) {
 }
 
 // ── searchTicker ──────────────────────────────────────────────
-type FinnhubSearchResult = {
-  result?: Array<{ symbol: string; description: string; type: string }>;
-};
-
 export async function searchTicker(query: string) {
   const isKorean = /[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(query);
 
@@ -146,7 +172,7 @@ export async function searchTicker(query: string) {
   }
 
   const [finnhubData, naverResults] = await Promise.allSettled([
-    fetchJson<FinnhubSearchResult>(
+    fetchJson<{ result?: Array<{ symbol: string; description: string }> }>(
       `https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}&token=${FINNHUB_KEY}`
     ),
     searchNaverTicker(query),
@@ -175,14 +201,11 @@ export async function searchTicker(query: string) {
 }
 
 // ── getQuote ──────────────────────────────────────────────────
-type FinnhubQuote = { c: number; h: number; l: number; o: number; pc: number; t: number };
-
 export async function getQuote(symbol: string) {
   if (isKoreanSymbol(symbol)) return getKoreanQuote(symbol);
 
-  // Finnhub — 토큰을 쿼리 파라미터로 전달 (헤더 방식 403 우회)
   const url = `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${FINNHUB_KEY}`;
-  const data = await fetchJson<FinnhubQuote>(url);
+  const data = await fetchJson<{ c: number; h: number; l: number; o: number; pc: number }>(url);
   if (!data.c || data.c === 0) throw new Error(`No price data for ${symbol}`);
   return {
     symbol,
@@ -196,28 +219,7 @@ export async function getQuote(symbol: string) {
 }
 
 // ── getChart ──────────────────────────────────────────────────
-type FinnhubCandles = { c: number[]; t: number[]; s: string };
-
 export async function getChart(symbol: string, range: "1d" | "5d" | "1mo") {
   if (isKoreanSymbol(symbol)) return getKoreanChart(symbol, range);
-
-  const now = Math.floor(Date.now() / 1000);
-  const resolution = range === "1d" ? "5" : "D";
-  const from =
-    range === "1d" ? now - 60 * 60 * 24
-    : range === "5d" ? now - 60 * 60 * 24 * 5
-    : now - 60 * 60 * 24 * 30;
-
-  // 토큰을 쿼리 파라미터로 전달
-  const url = `https://finnhub.io/api/v1/stock/candle?symbol=${encodeURIComponent(symbol)}&resolution=${resolution}&from=${from}&to=${now}&token=${FINNHUB_KEY}`;
-  const data = await fetchJson<FinnhubCandles>(url);
-
-  if (data.s !== "ok" || !data.t?.length) throw new Error(`No chart data for ${symbol}`);
-
-  return {
-    quotes: data.t.map((ts, i) => ({
-      date: new Date(ts * 1000),
-      close: data.c[i] ?? 0,
-    })),
-  };
+  return getUsChart(symbol, range);
 }

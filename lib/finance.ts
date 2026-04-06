@@ -19,6 +19,8 @@ async function fetchWithRetry<T>(urls: string[], headers?: Record<string, string
       });
       if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
       const text = await res.text();
+      // XML 응답이면 그대로 반환 (JSON.parse 시도하지 않음)
+      if (text.trimStart().startsWith("<")) return text as unknown as T;
       return JSON.parse(text) as T;
     } catch (e) {
       lastErr = e;
@@ -81,20 +83,11 @@ async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
   const code = toKrxCode(symbol);
 
   // 엔드포인트 목록 — 순서대로 시도
-  const endpointSets: Array<{ urls: string[]; headers: Record<string, string> }> = [
-    // 1) 네이버 증권 PC API (일봉/분봉)
+  const endpointSets: Array<{ urls: string[]; headers: Record<string, string>; isXml?: boolean }> = [
+    // 1) 네이버 모바일 캔들 API (분봉/일봉)
     {
       urls: range === "1d"
-        ? [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=80&requestType=0`]
-        : range === "5d"
-        ? [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=5&requestType=0`]
-        : [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=30&requestType=0`],
-      headers: { "Referer": "https://finance.naver.com/" },
-    },
-    // 2) 네이버 모바일 API
-    {
-      urls: range === "1d"
-        ? [`https://m.stock.naver.com/api/stock/${code}/candle/minute?count=80`]
+        ? [`https://m.stock.naver.com/api/stock/${code}/candle/minute?count=78&interval=5`]
         : range === "5d"
         ? [`https://m.stock.naver.com/api/stock/${code}/candle/day?count=5`]
         : [`https://m.stock.naver.com/api/stock/${code}/candle/day?count=30`],
@@ -103,54 +96,101 @@ async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
         "Origin": "https://m.stock.naver.com",
       },
     },
-    // 3) 네이버 금융 신규 API
+    // 2) 네이버 증권 신규 차트 API
     {
       urls: range === "1d"
-        ? [`https://api.stock.naver.com/chart/domestic/item/${code}/minute?count=80&interval=1`]
+        ? [`https://api.stock.naver.com/chart/domestic/item/${code}/minute?count=78&interval=5`]
         : range === "5d"
-        ? [`https://api.stock.naver.com/chart/domestic/item/${code}/day?count=5&interval=1`]
-        : [`https://api.stock.naver.com/chart/domestic/item/${code}/day?count=30&interval=1`],
+        ? [`https://api.stock.naver.com/chart/domestic/item/${code}/day?count=5`]
+        : [`https://api.stock.naver.com/chart/domestic/item/${code}/day?count=30`],
       headers: {
         "Referer": "https://finance.naver.com/",
         "Origin": "https://finance.naver.com",
       },
     },
+    // 3) 네이버 증권 PC XML API (fchart)
+    {
+      urls: range === "1d"
+        ? [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=minute&count=78&requestType=0`]
+        : range === "5d"
+        ? [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=5&requestType=0`]
+        : [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=30&requestType=0`],
+      headers: { "Referer": "https://finance.naver.com/" },
+      isXml: true,
+    },
   ];
 
-  for (const { urls, headers } of endpointSets) {
+  for (const { urls, headers, isXml } of endpointSets) {
     try {
       const data = await fetchWithRetry<unknown>(urls, headers);
 
-      // 배열 형태 응답 처리
-      if (Array.isArray(data) && data.length > 1) {
-        const quotes = data.map((d: Record<string, unknown>) => {
-          const dateStr = String(d.localDate ?? d.date ?? d.candleDate ?? "");
-          const timeStr = String(d.localTime ?? d.time ?? d.candleTime ?? "0930");
-          const ymd = dateStr.length === 8
-            ? `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`
-            : dateStr.length >= 10 ? dateStr.slice(0, 10) : new Date().toISOString().slice(0, 10);
-          const hhmm = timeStr.replace(/(\d{2})(\d{2}).*/, "$1:$2");
-          const close = Number(String(
-            d.closePrice ?? d.close ?? d.ncv ?? d.stck_prpr ?? 0
-          ).replace(/,/g, ""));
-          return { date: new Date(`${ymd}T${hhmm}:00+09:00`), close };
-        }).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
-
-        if (quotes.length > 1) return { quotes };
-      }
-
-      // XML 형태 응답 처리 (fchart.stock.naver.com)
-      if (typeof data === "string" || (data as Record<string, unknown>)?.toString) {
+      if (isXml || typeof data === "string") {
+        // XML 형태 응답 처리 (fchart.stock.naver.com)
         const str = String(data);
-        const matches = [...str.matchAll(/item date="(\d+)" open="\d+" high="\d+" low="\d+" close="(\d+)"/g)];
-        if (matches.length > 1) {
+        const matches = [
+          ...str.matchAll(/item date="(\d+)" open="\d+" high="\d+" low="\d+" close="(\d+)"/g),
+        ];
+        if (matches.length >= 1) {
           const quotes = matches.map((m) => {
             const ds = m[1]; // "20240405" or "202404051030"
             const ymd = `${ds.slice(0, 4)}-${ds.slice(4, 6)}-${ds.slice(6, 8)}`;
-            const hhmm = ds.length > 8 ? `${ds.slice(8, 10)}:${ds.slice(10, 12)}` : "15:30";
+            const hhmm = ds.length >= 12
+              ? `${ds.slice(8, 10)}:${ds.slice(10, 12)}`
+              : "15:30";
             return { date: new Date(`${ymd}T${hhmm}:00+09:00`), close: Number(m[2]) };
           }).filter((q) => q.close > 0);
-          if (quotes.length > 1) return { quotes };
+          if (quotes.length >= 1) return { quotes };
+        }
+        continue;
+      }
+
+      // 배열 형태 JSON 응답 처리
+      if (Array.isArray(data) && data.length >= 1) {
+        const quotes = data.map((d: Record<string, unknown>) => {
+          // 네이버 모바일 API 필드명: candleDate, candleTime, closePrice
+          const dateStr = String(
+            d.candleDate ?? d.localDate ?? d.date ?? d.stck_bsop_date ?? ""
+          );
+          const timeStr = String(
+            d.candleTime ?? d.localTime ?? d.time ?? d.stck_cntg_hour ?? "153000"
+          );
+          const ymd = dateStr.length === 8
+            ? `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`
+            : dateStr.length >= 10
+            ? dateStr.slice(0, 10)
+            : new Date().toISOString().slice(0, 10);
+          // timeStr이 "HHmmss" 또는 "HHmm" 형태 모두 처리
+          const hh = timeStr.slice(0, 2);
+          const mm = timeStr.slice(2, 4);
+          const hhmm = `${hh}:${mm}`;
+          const close = Number(
+            String(d.closePrice ?? d.close ?? d.ncv ?? d.stck_prpr ?? 0).replace(/,/g, "")
+          );
+          return { date: new Date(`${ymd}T${hhmm}:00+09:00`), close };
+        }).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
+
+        if (quotes.length >= 1) return { quotes };
+      }
+
+      // 객체 형태 JSON 응답 처리 (일부 API는 { candles: [...] } 구조)
+      if (data && typeof data === "object" && !Array.isArray(data)) {
+        const obj = data as Record<string, unknown>;
+        const arr = (obj.candles ?? obj.items ?? obj.datas ?? obj.chartinfos) as unknown[];
+        if (Array.isArray(arr) && arr.length >= 1) {
+          const quotes = (arr as Record<string, unknown>[]).map((d) => {
+            const dateStr = String(d.candleDate ?? d.date ?? d.localDate ?? "");
+            const timeStr = String(d.candleTime ?? d.time ?? d.localTime ?? "153000");
+            const ymd = dateStr.length === 8
+              ? `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`
+              : dateStr.length >= 10 ? dateStr.slice(0, 10) : new Date().toISOString().slice(0, 10);
+            const hh = timeStr.slice(0, 2);
+            const mm = timeStr.slice(2, 4);
+            const close = Number(
+              String(d.closePrice ?? d.close ?? 0).replace(/,/g, "")
+            );
+            return { date: new Date(`${ymd}T${hh}:${mm}:00+09:00`), close };
+          }).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
+          if (quotes.length >= 1) return { quotes };
         }
       }
     } catch {
@@ -158,10 +198,18 @@ async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
     }
   }
 
-  // 최후 fallback: 현재가 1포인트
+  // 최후 fallback: 현재가를 기반으로 단일 포인트 생성
   try {
     const quote = await getKoreanQuote(symbol);
-    return { quotes: [{ date: new Date(), close: quote.regularMarketPrice }] };
+    const now = new Date();
+    // 최소한 2포인트 생성 (차트 표시를 위해)
+    const prev = new Date(now.getTime() - 60 * 1000);
+    return {
+      quotes: [
+        { date: prev, close: quote.regularMarketPreviousClose || quote.regularMarketPrice },
+        { date: now, close: quote.regularMarketPrice },
+      ],
+    };
   } catch {
     throw new Error(`차트 데이터를 불러올 수 없습니다: ${symbol}`);
   }

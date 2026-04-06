@@ -48,7 +48,7 @@ export async function getUsdToKrw(): Promise<number> {
       clearTimeout(id);
     }
   } catch {}
-  return 1400; // 네이버 실패 시 기본값
+  return 1400;
 }
 
 // ── 한국 주식 현재가 (네이버 금융) ───────────────────────────
@@ -120,10 +120,10 @@ async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
   }
 }
 
-// ── 한국 주식 검색 (네이버 금융) ─────────────────────────────
+// ── 한국 주식 검색 (네이버 자동완성 API) ─────────────────────
 async function searchKoreanTicker(query: string) {
   try {
-    const url = `https://m.stock.naver.com/api/search/all?query=${encodeURIComponent(query)}&exchange=KOSPI,KOSDAQ`;
+    const url = `https://ac.stock.naver.com/ac?q=${encodeURIComponent(query)}&target=stock,index,marketindicator`;
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -131,19 +131,19 @@ async function searchKoreanTicker(query: string) {
         signal: controller.signal,
         headers: {
           "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
-          "Referer": "https://m.stock.naver.com/",
+          "Referer": "https://finance.naver.com/",
         },
         next: { revalidate: 0 },
       });
       if (!res.ok) return [];
       const data = await res.json() as {
-        stocks?: Array<{ itemCode?: string; itemName?: string; stockExchangeType?: { code?: string } }>;
+        items?: Array<{ code?: string; name?: string; typeCode?: string }>;
       };
-      return (data.stocks ?? []).slice(0, 10).map((s) => {
-        const exchange = s.stockExchangeType?.code === "KOSDAQ" ? ".KQ" : ".KS";
+      return (data.items ?? []).slice(0, 10).map((s) => {
+        const exchange = s.typeCode === "KOSDAQ" ? ".KQ" : ".KS";
         return {
-          symbol: `${s.itemCode}${exchange}`,
-          name: s.itemName ?? s.itemCode ?? "",
+          symbol: `${s.code}${exchange}`,
+          name: s.name ?? s.code ?? "",
           source: "db" as const,
         };
       });
@@ -161,40 +161,29 @@ type FinnhubSearchResult = {
 };
 
 export async function searchTicker(query: string) {
-  // 한국어 포함 여부로 한국/미국 구분
-  const isKorean = /[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(query);
+  const krx = await searchKoreanTicker(query);
 
-  if (isKorean) {
-    // 한국어 검색은 네이버 금융만 사용
-    const krx = await searchKoreanTicker(query);
+  // 한국어 검색이거나 네이버에서 결과가 나왔으면 네이버 결과 사용
+  if (/[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(query) || krx.length > 0) {
     return { quotes: krx.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })) };
   }
 
-  // 영문 검색: 네이버(한국주식) + Finnhub(미국주식) 병렬 조회
-  const [krx, finnhubData] = await Promise.allSettled([
-    searchKoreanTicker(query),
-    fetchJson<FinnhubSearchResult>(
+  // 네이버 결과 없을 때만 Finnhub 시도 (미국 주식 영문 검색)
+  try {
+    const data = await fetchJson<FinnhubSearchResult>(
       `https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}`,
       { "X-Finnhub-Token": FINNHUB_KEY }
-    ),
-  ]);
-
-  const krxResults = krx.status === "fulfilled" ? krx.value : [];
-  const usaResults =
-    finnhubData.status === "fulfilled"
-      ? (finnhubData.value.result ?? []).slice(0, 10).map((r) => ({
-          symbol: r.symbol,
-          shortname: r.description,
-          longname: r.description,
-        }))
-      : [];
-
-  return {
-    quotes: [
-      ...krxResults.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })),
-      ...usaResults,
-    ],
-  };
+    );
+    return {
+      quotes: (data.result ?? []).slice(0, 10).map((r) => ({
+        symbol: r.symbol,
+        shortname: r.description,
+        longname: r.description,
+      })),
+    };
+  } catch {
+    return { quotes: [] };
+  }
 }
 
 // ── getQuote ──────────────────────────────────────────────────

@@ -100,8 +100,8 @@ export function StockChart({ symbol }: { symbol: string }) {
       </div>
       {loading && <p className="text-sm text-slate-400">불러오는 중...</p>}
       {error && <p className="text-sm text-red-400">오류: {error}</p>}
-      {!loading && !error && points.length > 1 && <Line data={chartData} options={options} />}
-      {!loading && !error && points.length <= 1 && (
+      {!loading && !error && points.length >= 2 && <Line data={chartData} options={options} />}
+      {!loading && !error && points.length < 2 && (
         <p className="text-sm text-slate-400">차트 데이터가 없습니다.</p>
       )}
     </section>

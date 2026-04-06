@@ -11,14 +11,15 @@ async function fetchWithRetry<T>(urls: string[], headers?: Record<string, string
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
           "Accept": "application/json, text/plain, */*",
-          "Accept-Language": "en-US,en;q=0.9",
+          "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8",
           "Cache-Control": "no-cache",
           ...(headers ?? {}),
         },
         next: { revalidate: 0 },
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return (await res.json()) as T;
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${url}`);
+      const text = await res.text();
+      return JSON.parse(text) as T;
     } catch (e) {
       lastErr = e;
     } finally {
@@ -39,16 +40,17 @@ function toKrxCode(symbol: string) {
 // ── USD→KRW 환율 ──────────────────────────────────────────────
 export async function getUsdToKrw(): Promise<number> {
   try {
-    const data = await fetchWithRetry<{ closePrice?: string }>([
-      "https://m.stock.naver.com/api/forex/FX_USDKRW",
-    ], { "Referer": "https://m.stock.naver.com/" });
+    const data = await fetchWithRetry<{ closePrice?: string }>(
+      ["https://m.stock.naver.com/api/forex/FX_USDKRW"],
+      { "Referer": "https://m.stock.naver.com/" }
+    );
     const rate = Number(data.closePrice?.replace(/,/g, "") ?? 0);
     if (rate > 0) return rate;
   } catch {}
   return 1400;
 }
 
-// ── 한국 주식 현재가 ──────────────────────────────────────────
+// ── 한국 주식 현재가 (네이버) ─────────────────────────────────
 async function getKoreanQuote(symbol: string) {
   const code = toKrxCode(symbol);
   const data = await fetchWithRetry<{
@@ -57,9 +59,10 @@ async function getKoreanQuote(symbol: string) {
     openPrice?: string;
     highPrice?: string;
     lowPrice?: string;
-  }>([`https://m.stock.naver.com/api/stock/${code}/basic`], {
-    "Referer": "https://m.stock.naver.com/",
-  });
+  }>(
+    [`https://m.stock.naver.com/api/stock/${code}/basic`],
+    { "Referer": "https://m.stock.naver.com/" }
+  );
   const price = Number(data.closePrice?.replace(/,/g, "") ?? 0);
   if (!price) throw new Error(`No price for ${symbol}`);
   return {
@@ -73,51 +76,95 @@ async function getKoreanQuote(symbol: string) {
   };
 }
 
-// ── 한국 주식 차트 ────────────────────────────────────────────
+// ── 한국 주식 차트 (네이버 여러 엔드포인트 시도) ──────────────
 async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
   const code = toKrxCode(symbol);
 
-  // 네이버 금융 일봉/분봉 API
-  const isIntraday = range === "1d";
-  const count = range === "1d" ? 100 : range === "5d" ? 5 : 30;
-
-  const urls = isIntraday
-    ? [
-        `https://api.stock.naver.com/chart/domestic/item/${code}/minute?count=${count}&interval=1`,
-        `https://m.stock.naver.com/api/stock/${code}/price?timeframe=day&count=1`,
-      ]
-    : [
-        `https://api.stock.naver.com/chart/domestic/item/${code}/day?count=${count}&interval=1`,
-        `https://m.stock.naver.com/api/stock/${code}/price?timeframe=day&count=${count}`,
-      ];
-
-  for (const url of urls) {
-    try {
-      const data = await fetchWithRetry<unknown>([url], {
+  // 엔드포인트 목록 — 순서대로 시도
+  const endpointSets: Array<{ urls: string[]; headers: Record<string, string> }> = [
+    // 1) 네이버 증권 PC API (일봉/분봉)
+    {
+      urls: range === "1d"
+        ? [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=80&requestType=0`]
+        : range === "5d"
+        ? [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=5&requestType=0`]
+        : [`https://fchart.stock.naver.com/sise.nhn?symbol=${code}&timeframe=day&count=30&requestType=0`],
+      headers: { "Referer": "https://finance.naver.com/" },
+    },
+    // 2) 네이버 모바일 API
+    {
+      urls: range === "1d"
+        ? [`https://m.stock.naver.com/api/stock/${code}/candle/minute?count=80`]
+        : range === "5d"
+        ? [`https://m.stock.naver.com/api/stock/${code}/candle/day?count=5`]
+        : [`https://m.stock.naver.com/api/stock/${code}/candle/day?count=30`],
+      headers: {
+        "Referer": "https://m.stock.naver.com/",
+        "Origin": "https://m.stock.naver.com",
+      },
+    },
+    // 3) 네이버 금융 신규 API
+    {
+      urls: range === "1d"
+        ? [`https://api.stock.naver.com/chart/domestic/item/${code}/minute?count=80&interval=1`]
+        : range === "5d"
+        ? [`https://api.stock.naver.com/chart/domestic/item/${code}/day?count=5&interval=1`]
+        : [`https://api.stock.naver.com/chart/domestic/item/${code}/day?count=30&interval=1`],
+      headers: {
         "Referer": "https://finance.naver.com/",
         "Origin": "https://finance.naver.com",
-      });
+      },
+    },
+  ];
 
+  for (const { urls, headers } of endpointSets) {
+    try {
+      const data = await fetchWithRetry<unknown>(urls, headers);
+
+      // 배열 형태 응답 처리
       if (Array.isArray(data) && data.length > 1) {
         const quotes = data.map((d: Record<string, unknown>) => {
-          const dateStr = String(d.localDate ?? d.date ?? d.time ?? "");
-          const timeStr = String(d.localTime ?? d.time ?? "0930");
+          const dateStr = String(d.localDate ?? d.date ?? d.candleDate ?? "");
+          const timeStr = String(d.localTime ?? d.time ?? d.candleTime ?? "0930");
           const ymd = dateStr.length === 8
-            ? `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`
-            : dateStr.slice(0, 10);
+            ? `${dateStr.slice(0, 4)}-${dateStr.slice(4, 6)}-${dateStr.slice(6, 8)}`
+            : dateStr.length >= 10 ? dateStr.slice(0, 10) : new Date().toISOString().slice(0, 10);
           const hhmm = timeStr.replace(/(\d{2})(\d{2}).*/, "$1:$2");
-          const close = Number(String(d.closePrice ?? d.close ?? d.ncv ?? 0).replace(/,/g, ""));
+          const close = Number(String(
+            d.closePrice ?? d.close ?? d.ncv ?? d.stck_prpr ?? 0
+          ).replace(/,/g, ""));
           return { date: new Date(`${ymd}T${hhmm}:00+09:00`), close };
         }).filter((q) => !isNaN(q.date.getTime()) && q.close > 0);
 
         if (quotes.length > 1) return { quotes };
       }
-    } catch {}
+
+      // XML 형태 응답 처리 (fchart.stock.naver.com)
+      if (typeof data === "string" || (data as Record<string, unknown>)?.toString) {
+        const str = String(data);
+        const matches = [...str.matchAll(/item date="(\d+)" open="\d+" high="\d+" low="\d+" close="(\d+)"/g)];
+        if (matches.length > 1) {
+          const quotes = matches.map((m) => {
+            const ds = m[1]; // "20240405" or "202404051030"
+            const ymd = `${ds.slice(0, 4)}-${ds.slice(4, 6)}-${ds.slice(6, 8)}`;
+            const hhmm = ds.length > 8 ? `${ds.slice(8, 10)}:${ds.slice(10, 12)}` : "15:30";
+            return { date: new Date(`${ymd}T${hhmm}:00+09:00`), close: Number(m[2]) };
+          }).filter((q) => q.close > 0);
+          if (quotes.length > 1) return { quotes };
+        }
+      }
+    } catch {
+      continue;
+    }
   }
 
-  // fallback: 현재가 단일
-  const quote = await getKoreanQuote(symbol);
-  return { quotes: [{ date: new Date(), close: quote.regularMarketPrice }] };
+  // 최후 fallback: 현재가 1포인트
+  try {
+    const quote = await getKoreanQuote(symbol);
+    return { quotes: [{ date: new Date(), close: quote.regularMarketPrice }] };
+  } catch {
+    throw new Error(`차트 데이터를 불러올 수 없습니다: ${symbol}`);
+  }
 }
 
 // ── 미국 주식 현재가 ──────────────────────────────────────────
@@ -168,7 +215,6 @@ async function getUsChart(symbol: string, range: "1d" | "5d" | "1mo") {
 
   const timestamps = result.timestamp ?? [];
   const closes = result.indicators?.quote?.[0]?.close ?? [];
-
   const quotes = timestamps
     .map((ts, i) => ({ date: new Date(ts * 1000), close: closes[i] ?? 0 }))
     .filter((q) => q.close > 0);
@@ -188,9 +234,10 @@ async function searchNaverTicker(query: string) {
         reutersCode?: string;
         nationCode?: string;
       }>;
-    }>([`https://ac.stock.naver.com/ac?q=${encodeURIComponent(query)}&target=stock,index,marketindicator`], {
-      "Referer": "https://finance.naver.com/",
-    });
+    }>(
+      [`https://ac.stock.naver.com/ac?q=${encodeURIComponent(query)}&target=stock,index,marketindicator`],
+      { "Referer": "https://finance.naver.com/" }
+    );
     return (data.items ?? []).slice(0, 10).map((s) => {
       const isKor = s.nationCode === "KOR";
       const exchange = s.typeCode === "KOSDAQ" ? ".KQ" : ".KS";
@@ -219,21 +266,27 @@ export async function searchTicker(query: string) {
     }>([`https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}&token=${FINNHUB_KEY}`]);
 
     const finnhubItems = (data.result ?? []).slice(0, 10).map((r) => ({
-      symbol: r.symbol, shortname: r.description, longname: r.description,
+      symbol: r.symbol,
+      shortname: r.description,
+      longname: r.description,
     }));
     const finnhubSymbols = new Set(finnhubItems.map((r) => r.symbol));
     return {
       quotes: [
         ...finnhubItems,
-        ...naver.filter((r) => !finnhubSymbols.has(r.symbol))
+        ...naver
+          .filter((r) => !finnhubSymbols.has(r.symbol))
           .map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })),
       ],
     };
   } catch {
-    return { quotes: naver.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })) };
+    return {
+      quotes: naver.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })),
+    };
   }
 }
 
+// ── getQuote / getChart ───────────────────────────────────────
 export async function getQuote(symbol: string) {
   if (isKoreanSymbol(symbol)) return getKoreanQuote(symbol);
   return getUsQuote(symbol);

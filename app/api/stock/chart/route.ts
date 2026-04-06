@@ -10,7 +10,7 @@ export async function GET(req: Request) {
   try {
     const chart = await getChart(symbol, range);
     const result = chart.quotes.map((q) => ({ ts: q.date.toISOString(), c: q.close ?? 0 }));
-    return NextResponse.json({ points: result });
+    return NextResponse.json({ points: result, count: result.length });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ message, symbol, range }, { status: 502 });

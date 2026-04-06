@@ -11,7 +11,8 @@ export async function GET(req: Request) {
     const chart = await getChart(symbol, range);
     const result = chart.quotes.map((q) => ({ ts: q.date.toISOString(), c: q.close ?? 0 }));
     return NextResponse.json({ points: result });
-  } catch {
-    return NextResponse.json({ message: "가격 데이터를 불러오지 못했습니다." }, { status: 502 });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ message, symbol, range }, { status: 502 });
   }
 }

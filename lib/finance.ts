@@ -120,7 +120,7 @@ async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
   }
 }
 
-// ── 한국 주식 검색 (네이버 자동완성 API) ─────────────────────
+// ── 한국/해외 주식 검색 (네이버 자동완성 API) ─────────────────
 async function searchKoreanTicker(query: string) {
   try {
     const url = `https://ac.stock.naver.com/ac?q=${encodeURIComponent(query)}&target=stock,index,marketindicator`;
@@ -137,16 +137,30 @@ async function searchKoreanTicker(query: string) {
       });
       if (!res.ok) return [];
       const data = await res.json() as {
-        items?: Array<{ code?: string; name?: string; typeCode?: string }>;
+        items?: Array<{
+          code?: string;
+          name?: string;
+          typeCode?: string;
+          reutersCode?: string;
+          nationCode?: string;
+        }>;
       };
       return (data.items ?? []).slice(0, 10).map((s) => {
-        const exchange = s.typeCode === "KOSDAQ" ? ".KQ" : ".KS";
+        let symbol = "";
+        if (s.nationCode === "KOR") {
+          const exchange = s.typeCode === "KOSDAQ" ? ".KQ" : ".KS";
+          symbol = `${s.code}${exchange}`;
+        } else {
+          // 해외 주식: "AAPL.O" → "AAPL"
+          const raw = s.reutersCode ?? s.code ?? "";
+          symbol = raw.replace(/\.(O|OQ|N|A|T|SS|SZ)$/, "");
+        }
         return {
-          symbol: `${s.code}${exchange}`,
+          symbol,
           name: s.name ?? s.code ?? "",
           source: "db" as const,
         };
-      });
+      }).filter((s) => s.symbol);
     } finally {
       clearTimeout(id);
     }
@@ -161,14 +175,13 @@ type FinnhubSearchResult = {
 };
 
 export async function searchTicker(query: string) {
-  const krx = await searchKoreanTicker(query);
-
-  // 한국어 검색이거나 네이버에서 결과가 나왔으면 네이버 결과 사용
-  if (/[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(query) || krx.length > 0) {
-    return { quotes: krx.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })) };
+  // 네이버로 먼저 검색 (한국어/영문 모두)
+  const naverResults = await searchKoreanTicker(query);
+  if (naverResults.length > 0) {
+    return { quotes: naverResults.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })) };
   }
 
-  // 네이버 결과 없을 때만 Finnhub 시도 (미국 주식 영문 검색)
+  // 네이버 결과 없을 때만 Finnhub 시도
   try {
     const data = await fetchJson<FinnhubSearchResult>(
       `https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}`,

@@ -29,7 +29,9 @@ export default async function StockDetailPage({ params }: { params: { symbol: st
               <p className="text-2xl font-semibold">{Math.round(price).toLocaleString()}원</p>
             ) : (
               <>
-                <p className="text-2xl font-semibold">${price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+                <p className="text-2xl font-semibold">
+                  ${price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </p>
                 {krwPrice !== null && usdToKrw !== null && (
                   <p className="text-sm text-slate-400">
                     ≈ {krwPrice.toLocaleString()}원

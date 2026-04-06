@@ -120,8 +120,8 @@ async function getKoreanChart(symbol: string, range: "1d" | "5d" | "1mo") {
   }
 }
 
-// ── 한국/해외 주식 검색 (네이버 자동완성 API) ─────────────────
-async function searchKoreanTicker(query: string) {
+// ── 네이버 자동완성 검색 ──────────────────────────────────────
+async function searchNaverTicker(query: string) {
   try {
     const url = `https://ac.stock.naver.com/ac?q=${encodeURIComponent(query)}&target=stock,index,marketindicator`;
     const controller = new AbortController();
@@ -145,20 +145,24 @@ async function searchKoreanTicker(query: string) {
           nationCode?: string;
         }>;
       };
+
       return (data.items ?? []).slice(0, 10).map((s) => {
         let symbol = "";
         if (s.nationCode === "KOR") {
+          // 한국 주식: KOSDAQ → .KQ, 나머지(KOSPI 등) → .KS
           const exchange = s.typeCode === "KOSDAQ" ? ".KQ" : ".KS";
           symbol = `${s.code}${exchange}`;
         } else {
-          // 해외 주식: "AAPL.O" → "AAPL"
+          // 해외 주식: reutersCode에서 로이터 전용 suffix만 제거
+          // .O(나스닥), .N(NYSE), .A(AMEX), .OQ 만 제거
+          // .HK, .T, .SS 등 거래소 코드는 유지
           const raw = s.reutersCode ?? s.code ?? "";
-          symbol = raw.replace(/\.(O|OQ|N|A|T|SS|SZ)$/, "");
+          symbol = raw.replace(/\.(O|OQ|N|A)$/, "");
         }
         return {
           symbol,
           name: s.name ?? s.code ?? "",
-          source: "db" as const,
+          source: "naver" as const,
         };
       }).filter((s) => s.symbol);
     } finally {
@@ -175,28 +179,34 @@ type FinnhubSearchResult = {
 };
 
 export async function searchTicker(query: string) {
-  // 네이버로 먼저 검색 (한국어/영문 모두)
-  const naverResults = await searchKoreanTicker(query);
-  if (naverResults.length > 0) {
-    return { quotes: naverResults.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })) };
-  }
-
-  // 네이버 결과 없을 때만 Finnhub 시도
-  try {
-    const data = await fetchJson<FinnhubSearchResult>(
+  // 네이버 + Finnhub 병렬 검색
+  const [naverResults, finnhubData] = await Promise.allSettled([
+    searchNaverTicker(query),
+    fetchJson<FinnhubSearchResult>(
       `https://finnhub.io/api/v1/search?q=${encodeURIComponent(query)}`,
       { "X-Finnhub-Token": FINNHUB_KEY }
-    );
-    return {
-      quotes: (data.result ?? []).slice(0, 10).map((r) => ({
-        symbol: r.symbol,
-        shortname: r.description,
-        longname: r.description,
-      })),
-    };
-  } catch {
-    return { quotes: [] };
-  }
+    ),
+  ]);
+
+  const naver = naverResults.status === "fulfilled" ? naverResults.value : [];
+
+  // Finnhub 결과에서 미국 주식만 필터 (한국 .KS/.KQ 중복 방지)
+  const finnhubItems =
+    finnhubData.status === "fulfilled"
+      ? (finnhubData.value.result ?? [])
+          .filter((r) => !r.symbol.includes(".") || r.symbol.endsWith(".KS") || r.symbol.endsWith(".KQ"))
+          .slice(0, 8)
+          .map((r) => ({ symbol: r.symbol, shortname: r.description, longname: r.description }))
+      : [];
+
+  // 네이버 결과 우선, Finnhub으로 보완
+  const naverSymbols = new Set(naver.map((r) => r.symbol));
+  const merged = [
+    ...naver.map((r) => ({ symbol: r.symbol, shortname: r.name, longname: r.name })),
+    ...finnhubItems.filter((r) => !naverSymbols.has(r.symbol)),
+  ];
+
+  return { quotes: merged };
 }
 
 // ── getQuote ──────────────────────────────────────────────────
